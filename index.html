@@ -864,6 +864,20 @@ const cy = cytoscape({
   boxSelectionEnabled: false,
 });
 applyTheme(); // sets data-theme first, then builds the graph style from the resulting tokens
+
+// the dot grid is a CSS background, so move/scale it with the graph's pan and zoom (like graph paper);
+// spacing doubles when zoomed far out so the dots never turn into a grey haze
+const GRID = 22;
+const mainEl = document.getElementById('main');
+function syncGrid() {
+  let size = GRID * cy.zoom();
+  while (size < 11) size *= 2;
+  const { x, y } = cy.pan();
+  mainEl.style.backgroundSize = `${size}px ${size}px`;
+  mainEl.style.backgroundPosition = `${x % size}px ${y % size}px`;
+}
+cy.on('viewport', syncGrid);
+syncGrid();
 darkQuery.addEventListener('change', applyTheme);
 
 let lastReqs = new Map();
