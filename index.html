@@ -759,17 +759,59 @@ function layout(nodes, edges) {
       r.forEach((id, i) => x.set(id, (i - (r.length - 1) / 2) * GAP));
     }
   }
-  // pull nodes toward their neighbours while keeping order and spacing
-  for (let it = 0; it < 6; it++) {
-    for (const k of keys) {
+  // pull nodes toward their neighbours while keeping order and spacing: the closest positions to
+  // `want` (least squares) with each node at least its gap right of the previous one. Subtracting the
+  // cumulative gaps turns that into "non-decreasing", solved exactly by pooling adjacent violators,
+  // so crowded rows spread evenly both ways instead of drifting to one side
+  for (let it = 0; it < 12; it++) {
+    for (const k of it % 2 ? [...keys].reverse() : keys) {
       const r = rows.get(k);
-      const want = r.map(bary);
-      // push right to resolve overlaps, then shift the row so its mean matches the desired mean
-      const pos = [];
-      want.forEach((w, i) => pos.push(i ? Math.max(w, pos[i - 1] + gapFor(r[i - 1], r[i])) : w));
-      const shift = (want.reduce((a, b) => a + b, 0) - pos.reduce((a, b) => a + b, 0)) / r.length;
-      for (let i = 0; i < pos.length; i++) pos[i] += shift;
-      r.forEach((id, i) => x.set(id, pos[i]));
+      const off = [0];
+      for (let i = 1; i < r.length; i++) off.push(off[i - 1] + gapFor(r[i - 1], r[i]));
+      const blocks = []; // { sum, n } of pooled (want - offset) values
+      r.forEach((id, i) => {
+        blocks.push({ sum: bary(id) - off[i], n: 1 });
+        while (blocks.length > 1) {
+          const b = blocks[blocks.length - 1], a = blocks[blocks.length - 2];
+          if (a.sum / a.n <= b.sum / b.n) break;
+          a.sum += b.sum; a.n += b.n; blocks.pop();
+        }
+      });
+      let i = 0;
+      for (const b of blocks) for (let j = 0; j < b.n; j++, i++) x.set(r[i], b.sum / b.n + off[i]);
+    }
+  }
+  // groups with no edges between them don't pull on each other, so pack them side by side (left to right
+  // by where they settled) instead of leaving them wherever the row order happened to put them
+  const comp = new Map();
+  const find = id => { while (comp.get(id) !== id) { comp.set(id, comp.get(comp.get(id))); id = comp.get(id); } return id; };
+  nodes.forEach((_, id) => comp.set(id, id));
+  segs.forEach(s => comp.set(find(s.source), find(s.target)));
+  const groups = new Map();
+  nodes.forEach((_, id) => { const c = find(id); if (!groups.has(c)) groups.set(c, []); groups.get(c).push(id); });
+  if (groups.size > 1) {
+    const mean = ids => ids.reduce((s, id) => s + x.get(id), 0) / ids.length;
+    const ranked = [...groups.values()].sort((a, b) => mean(a) - mean(b));
+    const rank = new Map(); ranked.forEach((g, i) => g.forEach(id => rank.set(id, i)));
+    rows.forEach(r => r.sort((a, b) => rank.get(a) - rank.get(b) || x.get(a) - x.get(b)));
+    const lastIn = new Map(); // row -> rightmost node placed so far
+    let right = -Infinity, rightId = null;
+    for (const g of ranked) {
+      const firstIn = new Map();
+      g.forEach(id => { const L = layer.get(id); if (!firstIn.has(L) || x.get(id) < x.get(firstIn.get(L))) firstIn.set(L, id); });
+      let shift = -Infinity;
+      firstIn.forEach((id, L) => { const p = lastIn.get(L); if (p) shift = Math.max(shift, x.get(p) + gapFor(p, id) + 24 - x.get(id)); });
+      if (shift === -Infinity && rightId) { // shares no row with what's placed: start just past it
+        const left = g.reduce((m, id) => x.get(id) < x.get(m) ? id : m);
+        shift = x.get(rightId) + gapFor(rightId, left) + 24 - x.get(left);
+      }
+      if (shift === -Infinity) shift = 0;
+      g.forEach(id => {
+        x.set(id, x.get(id) + shift);
+        const L = layer.get(id), p = lastIn.get(L);
+        if (!p || rank.get(p) !== rank.get(id) || x.get(id) > x.get(p)) lastIn.set(L, id);
+        if (x.get(id) > right) { right = x.get(id); rightId = id; }
+      });
     }
   }
   function gapFor(a, b) {
