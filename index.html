@@ -4,13 +4,29 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SFU Prereq Planner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<!-- non-blocking: if Google Fonts is slow or unreachable the page renders right away with the fallback font -->
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono:wght@400;500&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+<script>
+  // set the theme before first paint so there's one dark palette (keyed on data-theme) and no light flash;
+  // applyTheme() keeps it in sync afterwards
+  (function () {
+    var t = 'auto';
+    try { t = JSON.parse(localStorage.getItem('sfu-prereq-planner-v1') || '{}').theme || 'auto'; } catch (e) {}
+    if (t === 'auto') t = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+    document.documentElement.setAttribute('data-theme', t);
+  })();
+</script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.2/cytoscape.min.js"></script>
 <style>
-  /* Page and graph colours both come from these tokens (the graph reads them via getComputedStyle). */
+  /* shadcn/ui-style theme (zinc). Page and graph colours both come from these tokens (the graph reads them via getComputedStyle). */
   :root {
     color-scheme: light;
-    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --border: #dde1e8; --chip: #eef0f4;
-    --shadow: rgba(0,0,0,.14); --input: #ffffff;
+    --radius: 10px;
+    --bg: #ffffff; --sidebar: #fafafa; --panel: #ffffff; --popover: #ffffff; --text: #09090b; --muted: #71717a;
+    --border: #e4e4e7; --input-border: #e4e4e7; --chip: #f4f4f5; --accent: #f4f4f5; --ring: rgba(161,161,170,.5); --ring-strong: #a1a1aa;
+    --primary: #18181b; --primary-fg: #fafafa; --shadow: rgba(0,0,0,.08); --input: transparent;
     --node-bg: #ffffff; --node-text: #1d2330; --need: #4a5266;
     --ready: #2563c9; --ready-bg: #e8f0fc; --ready-text: #123e85;
     --taken: #2f8f5b; --taken-bg: #e6f4ec; --taken-text: #1d5e3b;
@@ -19,24 +35,12 @@
     --junction: #8a6d1f; --junction-bg: #fdf6e3; --junction-text: #6b5416; --junction-edge: #c4ad6b;
     --edge: #9aa1b0; --edge-hl: #4a5266; --lane: #9aa1b0; --blocked: #d9480f;
   }
-  @media (prefers-color-scheme: dark) {
-    :root:not([data-theme="light"]) {
-      color-scheme: dark;
-      --bg: #14171d; --panel: #1b1f27; --text: #e6e9ef; --muted: #9aa1b0; --border: #2e3442; --chip: #272c38;
-      --shadow: rgba(0,0,0,.5); --input: #151920;
-      --node-bg: #1f2430; --node-text: #e6e9ef; --need: #8a93a8;
-      --ready: #5b8def; --ready-bg: #1c2a45; --ready-text: #c3d6fb;
-      --taken: #4caf7d; --taken-bg: #163024; --taken-text: #b0e3c7;
-      --target: #e0566b; --target-bg: #3a1a21; --target-text: #f7c1ca;
-      --special: #6b7183; --special-bg: #232833; --special-text: #a9afbd;
-      --junction: #c9a54a; --junction-bg: #362f1e; --junction-text: #ecd28a; --junction-edge: #8a7440;
-      --edge: #59617a; --edge-hl: #c9cfdb; --lane: #6b7385; --blocked: #ff7b45;
-    }
-  }
+  /* data-theme is always the effective theme ("auto" is resolved in JS), so this is the only dark palette */
   :root[data-theme="dark"] {
     color-scheme: dark;
-    --bg: #14171d; --panel: #1b1f27; --text: #e6e9ef; --muted: #9aa1b0; --border: #2e3442; --chip: #272c38;
-    --shadow: rgba(0,0,0,.5); --input: #151920;
+    --bg: #09090b; --sidebar: #111113; --panel: #09090b; --popover: #18181b; --text: #fafafa; --muted: #a1a1aa;
+    --border: #27272a; --input-border: rgba(255,255,255,.15); --chip: #27272a; --accent: #27272a; --ring: rgba(113,113,122,.5); --ring-strong: #71717a;
+    --primary: #fafafa; --primary-fg: #18181b; --shadow: rgba(0,0,0,.5); --input: rgba(255,255,255,.045);
     --node-bg: #1f2430; --node-text: #e6e9ef; --need: #8a93a8;
     --ready: #5b8def; --ready-bg: #1c2a45; --ready-text: #c3d6fb;
     --taken: #4caf7d; --taken-bg: #163024; --taken-text: #b0e3c7;
@@ -47,97 +51,127 @@
   }
   * { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; }
-  body { background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; }
-  #side { width: 320px; flex: none; background: var(--panel); border-right: 1px solid var(--border); padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
-  #side h1 { font-size: 17px; margin: 0; }
-  #side h1 small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; margin-top: 2px; }
-  .group h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 6px; display: flex; justify-content: space-between; }
-  .group h2 button { font-size: 11px; text-transform: none; letter-spacing: 0; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.5 Geist, ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; -webkit-font-smoothing: antialiased; }
+  ::selection { background: var(--ring-strong); color: var(--bg); }
+  :focus-visible { outline: none; box-shadow: 0 0 0 3px var(--ring); }
+  button { font: inherit; cursor: pointer; color: var(--text); }
+  input[type="checkbox"] { accent-color: var(--primary); width: 16px; height: 16px; margin: 0; }
+
+  /* sidebar */
+  #side { width: 320px; flex: none; background: var(--sidebar); border-right: 1px solid var(--border); padding: 20px 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 22px; scrollbar-width: thin; }
+  #side h1 { font-size: 16px; font-weight: 600; letter-spacing: -.015em; margin: 0; line-height: 1.3; }
+  #side h1 small { display: block; font-weight: 400; color: var(--muted); font-size: 13px; letter-spacing: 0; margin-top: 2px; }
+  .group h2 { font-size: 12px; font-weight: 500; color: var(--muted); margin: 0 0 8px; display: flex; justify-content: space-between; align-items: center; }
+  .linkbtn { border: 0; background: none; color: var(--muted); padding: 0; font-size: 12px; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: transparent; transition: color .15s, text-decoration-color .15s; }
+  .linkbtn:hover { color: var(--text); text-decoration-color: currentColor; }
+
+  /* input + autocomplete popover */
   .adder { position: relative; }
-  .adder input { width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; font: inherit; background: var(--input); color: var(--text); }
-  .adder input:focus { outline: 2px solid var(--ready); outline-offset: -1px; }
-  .suggest { position: absolute; z-index: 20; left: 0; right: 0; top: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 6px 18px var(--shadow); max-height: 260px; overflow-y: auto; display: none; }
-  .suggest div { padding: 6px 9px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .suggest div.on, .suggest div:hover { background: var(--chip); }
-  .suggest b { font-weight: 600; }
-  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; min-height: 4px; }
-  .chip { background: var(--chip); border-radius: 12px; padding: 2px 4px 2px 9px; font-size: 12.5px; display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
-  .chip button { border: 0; background: none; cursor: pointer; color: var(--muted); font-size: 14px; line-height: 1; padding: 0 3px; }
-  .chip.target { border-left: 3px solid var(--target); }
-  .chip.taken { border-left: 3px solid var(--taken); }
-  .chip.excluded { border-left: 3px solid var(--muted); text-decoration: line-through; }
-  .chip.ready { border-left: 3px solid var(--ready); }
-  .chip:hover { filter: brightness(0.96); }
-  .chip.absent { opacity: .6; }
-  .opts label { display: flex; gap: 6px; align-items: center; margin: 3px 0; cursor: pointer; }
+  .adder input { width: 100%; height: 36px; padding: 0 12px; border: 1px solid var(--input-border); border-radius: calc(var(--radius) - 2px); font: inherit; background: var(--input); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.05); transition: border-color .15s, box-shadow .15s; }
+  .adder input::placeholder { color: var(--muted); }
+  .adder input:focus { outline: none; border-color: var(--ring-strong); box-shadow: 0 0 0 3px var(--ring); }
+  .suggest { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 4px); background: var(--popover); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); box-shadow: 0 4px 12px var(--shadow); max-height: 280px; overflow-y: auto; display: none; padding: 4px; }
+  .suggest div { padding: 6px 8px; border-radius: calc(var(--radius) - 4px); cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 13px; color: var(--muted); }
+  .suggest div.on, .suggest div:hover { background: var(--accent); color: var(--text); }
+  .suggest b { font-weight: 500; color: var(--text); margin-right: 4px; }
+
+  /* chips -> outline badges with a status dot */
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; min-height: 4px; }
+  .chip { border: 1px solid var(--border); background: var(--bg); border-radius: calc(var(--radius) - 4px); padding: 1px 2px 1px 8px; font-size: 12px; font-weight: 500; display: inline-flex; align-items: center; gap: 6px; cursor: pointer; transition: background .15s; }
+  .chip::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--muted); flex: none; }
+  .chip:hover { background: var(--accent); }
+  .chip button { border: 0; background: none; cursor: pointer; color: var(--muted); font-size: 13px; line-height: 1; padding: 2px 4px; border-radius: 4px; }
+  .chip button:hover { color: var(--text); background: var(--chip); }
+  .chip.target::before { background: var(--target); }
+  .chip.taken::before { background: var(--taken); }
+  .chip.ready::before { background: var(--ready); }
+  .chip.excluded { color: var(--muted); text-decoration: line-through; }
+  .chip.excluded::before { background: transparent; border: 1px solid var(--muted); }
+  .chip.absent { opacity: .55; }
+  #summary { font-size: 13px; color: var(--muted); margin-bottom: 2px; }
+  #summary b { color: var(--text); font-weight: 600; }
+
+  /* collapsibles */
+  .opts label { display: flex; gap: 8px; align-items: center; margin: 6px 0; cursor: pointer; font-size: 13px; }
   details.group > summary { list-style: none; cursor: pointer; }
   details.group > summary::-webkit-details-marker { display: none; }
-  details.group > summary h2::after { content: '▸'; font-size: 11px; transition: transform .15s; }
+  details.group > summary h2 { margin-bottom: 0; }
+  details.group[open] > summary h2 { margin-bottom: 10px; }
+  details.group > summary h2::after { content: '›'; font-size: 15px; line-height: 1; transition: transform .2s; }
   details.group[open] > summary h2::after { transform: rotate(90deg); }
-  .legend { display: grid; grid-template-columns: 18px 1fr; gap: 4px 8px; font-size: 12.5px; color: var(--muted); align-items: center; }
-  .sw { width: 16px; height: 12px; border-radius: 3px; border: 2px solid; }
+  details.group > summary:hover h2 { color: var(--text); }
+  .legend { display: grid; grid-template-columns: 18px 1fr; gap: 6px 10px; font-size: 13px; color: var(--muted); align-items: center; }
+  .sw { width: 16px; height: 12px; border-radius: 4px; border: 2px solid; }
   .hint { font-size: 12px; color: var(--muted); }
-  .hint kbd { font: 11px ui-monospace, monospace; background: var(--chip); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; }
-  button { font: inherit; cursor: pointer; color: var(--text); }
-  .linkbtn { border: 0; background: none; color: var(--muted); padding: 0; text-decoration: underline; }
-  .group h2 .linkbtn { font-size: 11px; }
-  #about { margin-top: auto; border-top: 1px solid var(--border); padding-top: 12px; font-size: 12px; color: var(--muted); }
-  #about p { margin: 0 0 6px; }
-  #about b { color: var(--text); }
-  #about a { color: var(--ready); }
-  #about summary { cursor: pointer; }
-  #about hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
+  .hint kbd { font: 500 11px Geist Mono, ui-monospace, monospace; background: var(--chip); color: var(--text); border-radius: 4px; padding: 1px 5px; }
+
+  /* footer */
+  #about { margin-top: auto; border-top: 1px solid var(--border); padding-top: 14px; font-size: 12px; color: var(--muted); }
+  #about p { margin: 0 0 8px; }
+  #about b { color: var(--text); font-weight: 500; }
+  #about a { color: var(--text); text-underline-offset: 3px; }
+  #about summary { cursor: pointer; font-weight: 500; }
+  #about summary:hover { color: var(--text); }
+  #about hr { border: 0; border-top: 1px solid var(--border); margin: 12px 0; }
   #about .credit { margin: 0; font-style: italic; }
-  #about ul { margin: 6px 0; padding-left: 16px; }
+  #about ul { margin: 8px 0; padding-left: 16px; }
   #about li { margin-bottom: 4px; }
-  #share-dialog { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 40px var(--shadow); padding: 18px; width: min(480px, calc(100vw - 32px)); }
-  #share-dialog::backdrop { background: rgba(0,0,0,.45); }
-  #share-dialog h3 { margin: 0 0 6px; font-size: 16px; }
-  #share-dialog .hint { margin: 0 0 12px; }
-  #share-dialog .share-row { display: flex; gap: 6px; margin-bottom: 8px; }
-  #share-dialog input { flex: 1; min-width: 0; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; font: 12px ui-monospace, monospace; background: var(--input); color: var(--text); }
-  #share-dialog button { border: 1px solid var(--border); background: var(--chip); border-radius: 6px; padding: 6px 12px; }
-  #share-dialog button.primary { background: var(--ready); border-color: var(--ready); color: #fff; font-weight: 600; }
-  #share-dialog #share-msg { min-height: 1.2em; margin: 0 0 10px; }
+
+  /* dialog */
+  #share-dialog { background: var(--popover); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 16px 48px var(--shadow); padding: 24px; width: min(480px, calc(100vw - 32px)); }
+  #share-dialog::backdrop { background: rgba(0,0,0,.5); }
+  #share-dialog h3 { margin: 0 0 6px; font-size: 18px; font-weight: 600; letter-spacing: -.015em; line-height: 1.2; }
+  #share-dialog .hint { margin: 0 0 16px; font-size: 14px; }
+  #share-dialog .share-row { display: flex; gap: 8px; margin-bottom: 8px; }
+  #share-dialog input { flex: 1; min-width: 0; height: 36px; padding: 0 12px; border: 1px solid var(--input-border); border-radius: calc(var(--radius) - 2px); font: 12px Geist Mono, ui-monospace, monospace; background: var(--input); color: var(--text); }
+  #share-dialog input:focus { outline: none; border-color: var(--ring-strong); box-shadow: 0 0 0 3px var(--ring); }
+  #share-dialog button { height: 36px; border: 1px solid var(--border); background: var(--bg); border-radius: calc(var(--radius) - 2px); padding: 0 16px; font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  #share-dialog button:hover { background: var(--accent); }
+  #share-dialog button.primary { background: var(--primary); border-color: var(--primary); color: var(--primary-fg); }
+  #share-dialog button.primary:hover { opacity: .9; }
+  #share-dialog #share-msg { min-height: 1.4em; margin: 0 0 12px; font-size: 13px; }
   #share-dialog form { text-align: right; margin: 0; }
-  #summary { font-size: 13px; color: var(--muted); }
-  #summary b { color: var(--text); }
-  #main { flex: 1; position: relative; min-width: 0; }
+
+  /* canvas + overlays */
+  #main { flex: 1; position: relative; min-width: 0; background: var(--bg); background-image: radial-gradient(var(--border) 1px, transparent 1px); background-size: 22px 22px; }
   #cy { position: absolute; inset: 0; }
-  #status { position: absolute; top: 12px; left: 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; color: var(--muted); pointer-events: none; }
+  #status { position: absolute; top: 12px; left: 12px; background: var(--popover); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); padding: 6px 12px; font-size: 13px; color: var(--muted); pointer-events: none; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
   #status:empty { display: none; }
-  #toolbar { position: absolute; top: 12px; right: 12px; display: flex; gap: 6px; z-index: 36; }
-  #toolbar button, #zoom button { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; box-shadow: 0 1px 3px var(--shadow); }
-  #toolbar button:hover, #zoom button:hover { background: var(--chip); }
-  #zoom { position: absolute; bottom: 14px; right: 12px; display: flex; flex-direction: column; gap: 4px; }
-  #zoom button { width: 34px; height: 32px; padding: 0; font-size: 16px; }
-  #toast { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); border-radius: 8px; padding: 8px 10px 8px 14px; font-size: 13px; display: none; align-items: center; gap: 12px; box-shadow: 0 6px 20px var(--shadow); z-index: 50; white-space: nowrap; }
-  #toast button { background: none; border: 0; color: inherit; font-weight: 700; text-decoration: underline; padding: 0 4px; }
+  #toolbar { position: absolute; top: 12px; right: 12px; display: flex; gap: 8px; z-index: 36; }
+  #toolbar button, #zoom button { height: 32px; background: var(--bg); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); padding: 0 12px; font-size: 13px; font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,.05); transition: background .15s; }
+  #toolbar button:hover, #zoom button:hover { background: var(--accent); }
+  #zoom { position: absolute; bottom: 14px; right: 12px; display: flex; flex-direction: column; gap: 6px; }
+  #zoom button { width: 32px; padding: 0; font-size: 15px; }
+  #toast { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--popover); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px 10px 10px 16px; font-size: 13px; font-weight: 500; display: none; align-items: center; gap: 14px; box-shadow: 0 8px 24px var(--shadow); z-index: 50; white-space: nowrap; }
+  #toast button { height: 26px; background: var(--primary); color: var(--primary-fg); border: 0; border-radius: calc(var(--radius) - 4px); padding: 0 10px; font-size: 12px; font-weight: 500; }
   #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; pointer-events: none; padding: 24px; }
   /* info card docked bottom-left so it never covers the highlighted tree */
-  #tip { position: absolute; z-index: 30; left: 12px; bottom: 14px; pointer-events: none; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 22px var(--shadow); padding: 9px 11px; width: min(360px, calc(100% - 76px)); max-height: 45%; overflow: hidden; font-size: 13px; display: none; }
-  #tip .t { font-weight: 600; }
-  #tip .m { color: var(--muted); font-size: 12px; margin-top: 3px; }
-  #tip .p { margin-top: 6px; font-size: 12px; }
+  #tip { position: absolute; z-index: 30; left: 12px; bottom: 14px; pointer-events: none; background: var(--popover); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 8px 24px var(--shadow); padding: 12px 14px; width: min(360px, calc(100% - 76px)); max-height: 45%; overflow: hidden; font-size: 13px; display: none; }
+  #tip .t { font-weight: 600; letter-spacing: -.01em; }
+  #tip .m { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  #tip .p { margin-top: 8px; font-size: 12px; }
   #tip ul { margin: 2px 0 0; padding-left: 16px; }
-  #menu { position: absolute; z-index: 40; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 22px var(--shadow); padding: 4px; display: none; min-width: 190px; }
-  #menu .hd { padding: 6px 10px 4px; font-weight: 600; font-size: 13px; }
-  #menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 6px 10px; border-radius: 5px; }
-  #menu button:hover { background: var(--chip); }
-  #detail { position: absolute; top: 0; right: 0; bottom: 0; width: 400px; max-width: 100%; background: var(--panel); border-left: 1px solid var(--border); box-shadow: -6px 0 20px var(--shadow); padding: 18px; overflow-y: auto; display: none; z-index: 48; }
-  #detail h3 { margin: 0 30px 4px 0; font-size: 18px; }
-  #detail .close { position: sticky; top: 0; float: right; margin: -6px -6px 6px 10px; border: 1px solid var(--border); background: var(--chip); border-radius: 6px; padding: 4px 10px; font-size: 13px; z-index: 1; }
-  #detail .close:hover { background: var(--border); }
-  #detail .sec { margin-top: 14px; }
-  #detail .sec h4 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
-  #detail .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
-  #detail .acts button { border: 1px solid var(--border); background: var(--chip); border-radius: 6px; padding: 4px 9px; font-size: 13px; }
+  #menu { position: absolute; z-index: 40; background: var(--popover); border: 1px solid var(--border); border-radius: calc(var(--radius) - 2px); box-shadow: 0 8px 24px var(--shadow); padding: 4px; display: none; min-width: 200px; }
+  #menu .hd { padding: 6px 8px; font-weight: 600; font-size: 13px; border-bottom: 1px solid var(--border); margin: 0 -4px 4px; padding-left: 12px; }
+  #menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 6px 8px; border-radius: calc(var(--radius) - 4px); font-size: 13px; }
+  #menu button:hover { background: var(--accent); }
+  #detail { position: absolute; top: 0; right: 0; bottom: 0; width: 420px; max-width: 100%; background: var(--panel); border-left: 1px solid var(--border); box-shadow: -8px 0 32px var(--shadow); padding: 24px; overflow-y: auto; display: none; z-index: 48; }
+  #detail h3 { margin: 0 30px 4px 0; font-size: 18px; font-weight: 600; letter-spacing: -.015em; line-height: 1.3; }
+  #detail .close { position: sticky; top: 0; float: right; margin: -8px -8px 8px 12px; height: 32px; border: 1px solid var(--border); background: var(--bg); border-radius: calc(var(--radius) - 2px); padding: 0 10px; font-size: 13px; font-weight: 500; z-index: 1; }
+  #detail .close:hover { background: var(--accent); }
+  #detail .sec { margin-top: 18px; }
+  #detail .sec h4 { margin: 0 0 4px; font-size: 13px; font-weight: 600; color: var(--text); }
+  #detail .sec h4 span { color: var(--muted); font-weight: 400; }
+  #detail .acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+  #detail .acts button { height: 32px; border: 1px solid var(--border); background: var(--bg); border-radius: calc(var(--radius) - 2px); padding: 0 12px; font-size: 13px; font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+  #detail .acts button:first-child { background: var(--primary); border-color: var(--primary); color: var(--primary-fg); }
+  #detail .acts button:hover { opacity: .9; }
   #detail ul { margin: 0; padding-left: 18px; }
-  #detail a { color: var(--ready); }
-  .side-toggle { display: none; float: right; font-size: 12px; font-weight: 400; margin-top: 3px; }
+  #detail a { color: var(--text); text-underline-offset: 3px; }
+  .side-toggle { display: none; float: right; margin-top: 3px; }
   @media (max-width: 760px) {
     body { flex-direction: column; }
-    #side { width: auto; max-height: 45vh; border-right: 0; border-bottom: 1px solid var(--border); padding: 12px 16px; gap: 14px; }
+    #side { width: auto; max-height: 45vh; border-right: 0; border-bottom: 1px solid var(--border); padding: 14px 16px; gap: 16px; }
     #main { flex: 1; min-height: 0; }
     .side-toggle { display: inline; }
     body.side-min #side > :not(h1) { display: none; }
@@ -773,8 +807,8 @@ function graphStyle() {
   return [
     { selector: 'node', style: {
       'label': 'data(label)', 'text-valign': 'center', 'text-halign': 'center',
-      'font-size': 13, 'font-weight': 600, 'color': v('node-text'),
-      'shape': 'round-rectangle', 'width': 100, 'height': 34,
+      'font-family': 'Geist, ui-sans-serif, system-ui, sans-serif', 'font-size': 13, 'font-weight': 600, 'color': v('node-text'),
+      'shape': 'round-rectangle', 'corner-radius': 8, 'width': 100, 'height': 34,
       'background-color': v('node-bg'), 'border-width': 2, 'border-color': v('need'),
       'transition-property': 'opacity', 'transition-duration': '120ms'
     }},
@@ -787,12 +821,12 @@ function graphStyle() {
     { selector: 'node.special.taken', style: { 'border-color': v('taken'), 'background-color': v('taken-bg') } },
     { selector: 'node.blocked', style: { 'border-color': v('blocked'), 'border-style': 'double', 'border-width': 4 } },
     { selector: 'node.junction', style: {
-      'shape': 'round-rectangle', 'width': 'data(w)', 'height': 20, 'font-size': 10.5, 'font-weight': 600,
+      'shape': 'round-rectangle', 'corner-radius': 10, 'width': 'data(w)', 'height': 20, 'font-size': 10.5, 'font-weight': 600,
       'background-color': v('junction-bg'), 'border-color': v('junction'), 'border-width': 1.5, 'color': v('junction-text')
     }},
     { selector: 'node.lane', style: {
       'shape': 'rectangle', 'background-opacity': 0, 'border-width': 0, 'width': 1, 'height': 1,
-      'font-size': 11, 'font-weight': 600, 'color': v('lane'), 'text-halign': 'left', 'events': 'no'
+      'font-size': 11, 'font-weight': 500, 'color': v('lane'), 'text-halign': 'left', 'events': 'no'
     }},
     { selector: 'node.focus', style: { 'underlay-color': v('ready'), 'underlay-opacity': 0.35, 'underlay-padding': 7, 'underlay-shape': 'round-rectangle' } },
     { selector: 'edge', style: {
@@ -808,15 +842,16 @@ function graphStyle() {
     { selector: '.dim', style: { 'opacity': 0.15 } },
   ];
 }
+// node labels are canvas text, so restyle once Geist has loaded (otherwise they keep the fallback font)
+if (document.fonts) document.fonts.ready.then(() => cy.style(graphStyle()));
 
 // ---------- theme ----------
 const THEMES = ['auto', 'light', 'dark'];
 const darkQuery = matchMedia('(prefers-color-scheme: dark)');
 function applyTheme() {
   const t = state.theme || 'auto';
-  if (t === 'auto') document.documentElement.removeAttribute('data-theme');
-  else document.documentElement.setAttribute('data-theme', t);
   const effective = t === 'auto' ? (darkQuery.matches ? 'dark' : 'light') : t;
+  document.documentElement.setAttribute('data-theme', effective); // CSS only keys on light/dark
   document.getElementById('btn-theme').textContent = { auto: `◐ Auto (${effective})`, light: '☀ Light', dark: '☾ Dark' }[t];
   cy.style(graphStyle());
 }
@@ -1016,13 +1051,15 @@ cy.on('tap', 'node', ev => {
   menu.style.top = Math.max(8, Math.min(p.y - menu.offsetHeight / 2, box.height - menu.offsetHeight - 8)) + 'px';
 });
 document.addEventListener('keydown', e => {
-  if (e.key === 'Escape') { hideMenu(); closeDetail(); } // the share <dialog> closes itself on Esc
+  // while the share <dialog> is open, Esc belongs to it (it closes itself); don't also close what's behind it
+  if (e.key === 'Escape' && !modalOpen()) { hideMenu(); closeDetail(); }
 });
 
 // ---------- detail panel ----------
 const detail = document.getElementById('detail');
 let detailId = null; // course shown in the panel, so it can refresh when SFU data arrives
 function closeDetail() { detail.style.display = 'none'; detailId = null; }
+const modalOpen = () => !!document.querySelector('dialog[open]');
 function openDetail(id) {
   detail.style.display = 'block';
   detailId = id;
@@ -1246,6 +1283,7 @@ document.getElementById('clear-taken').onclick = () => {
   state.taken = []; save(); render();
 };
 document.addEventListener('keydown', e => {
+  if (modalOpen()) return; // page shortcuts (undo, fit, /) shouldn't act behind the share dialog
   const el = document.activeElement;
   const inText = el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.type !== 'checkbox');
   // Ctrl+Z is ours unless there's text to undo in the field (focus stays in the empty input after adding a course)
@@ -1293,6 +1331,11 @@ function shareURL() {
 const shareDialog = document.getElementById('share-dialog');
 const shareInput = shareDialog.querySelector('input');
 const shareMsg = document.getElementById('share-msg');
+// clicks on the backdrop land on the <dialog> element itself, outside its box
+shareDialog.addEventListener('click', e => {
+  const r = shareDialog.getBoundingClientRect();
+  if (e.target === shareDialog && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) shareDialog.close();
+});
 document.getElementById('btn-share').onclick = () => {
   if (!state.targets.length) return showToast('Add a goal course first', false);
   shareInput.value = shareURL();
