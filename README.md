@@ -1,2 +1,2 @@
 # sfu-preqreq-graph
-vibe coded sfu course preerq grapher
+vibe coded sfu course prereq grapher
