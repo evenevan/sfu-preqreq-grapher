@@ -1,0 +1,1357 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SFU Prereq Planner</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.30.2/cytoscape.min.js"></script>
+<style>
+  /* Page and graph colours both come from these tokens (the graph reads them via getComputedStyle). */
+  :root {
+    color-scheme: light;
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #6b7385; --border: #dde1e8; --chip: #eef0f4;
+    --shadow: rgba(0,0,0,.14); --input: #ffffff;
+    --node-bg: #ffffff; --node-text: #1d2330; --need: #4a5266;
+    --ready: #2563c9; --ready-bg: #e8f0fc; --ready-text: #123e85;
+    --taken: #2f8f5b; --taken-bg: #e6f4ec; --taken-text: #1d5e3b;
+    --target: #a6192e; --target-bg: #fbeaec; --target-text: #7a1222;
+    --special: #7a7f8c; --special-bg: #f2f3f5; --special-text: #4a5266;
+    --junction: #8a6d1f; --junction-bg: #fdf6e3; --junction-text: #6b5416; --junction-edge: #c4ad6b;
+    --edge: #9aa1b0; --edge-hl: #4a5266; --lane: #9aa1b0; --blocked: #d9480f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #14171d; --panel: #1b1f27; --text: #e6e9ef; --muted: #9aa1b0; --border: #2e3442; --chip: #272c38;
+      --shadow: rgba(0,0,0,.5); --input: #151920;
+      --node-bg: #1f2430; --node-text: #e6e9ef; --need: #8a93a8;
+      --ready: #5b8def; --ready-bg: #1c2a45; --ready-text: #c3d6fb;
+      --taken: #4caf7d; --taken-bg: #163024; --taken-text: #b0e3c7;
+      --target: #e0566b; --target-bg: #3a1a21; --target-text: #f7c1ca;
+      --special: #6b7183; --special-bg: #232833; --special-text: #a9afbd;
+      --junction: #c9a54a; --junction-bg: #362f1e; --junction-text: #ecd28a; --junction-edge: #8a7440;
+      --edge: #59617a; --edge-hl: #c9cfdb; --lane: #6b7385; --blocked: #ff7b45;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #14171d; --panel: #1b1f27; --text: #e6e9ef; --muted: #9aa1b0; --border: #2e3442; --chip: #272c38;
+    --shadow: rgba(0,0,0,.5); --input: #151920;
+    --node-bg: #1f2430; --node-text: #e6e9ef; --need: #8a93a8;
+    --ready: #5b8def; --ready-bg: #1c2a45; --ready-text: #c3d6fb;
+    --taken: #4caf7d; --taken-bg: #163024; --taken-text: #b0e3c7;
+    --target: #e0566b; --target-bg: #3a1a21; --target-text: #f7c1ca;
+    --special: #6b7183; --special-bg: #232833; --special-text: #a9afbd;
+    --junction: #c9a54a; --junction-bg: #362f1e; --junction-text: #ecd28a; --junction-edge: #8a7440;
+    --edge: #59617a; --edge-hl: #c9cfdb; --lane: #6b7385; --blocked: #ff7b45;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  body { background: var(--bg); color: var(--text); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; display: flex; }
+  #side { width: 320px; flex: none; background: var(--panel); border-right: 1px solid var(--border); padding: 16px; overflow-y: auto; display: flex; flex-direction: column; gap: 18px; }
+  #side h1 { font-size: 17px; margin: 0; }
+  #side h1 small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .group h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); margin: 0 0 6px; display: flex; justify-content: space-between; }
+  .group h2 button { font-size: 11px; text-transform: none; letter-spacing: 0; }
+  .adder { position: relative; }
+  .adder input { width: 100%; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; font: inherit; background: var(--input); color: var(--text); }
+  .adder input:focus { outline: 2px solid var(--ready); outline-offset: -1px; }
+  .suggest { position: absolute; z-index: 20; left: 0; right: 0; top: 100%; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; box-shadow: 0 6px 18px var(--shadow); max-height: 260px; overflow-y: auto; display: none; }
+  .suggest div { padding: 6px 9px; cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .suggest div.on, .suggest div:hover { background: var(--chip); }
+  .suggest b { font-weight: 600; }
+  .chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; min-height: 4px; }
+  .chip { background: var(--chip); border-radius: 12px; padding: 2px 4px 2px 9px; font-size: 12.5px; display: inline-flex; align-items: center; gap: 3px; cursor: pointer; }
+  .chip button { border: 0; background: none; cursor: pointer; color: var(--muted); font-size: 14px; line-height: 1; padding: 0 3px; }
+  .chip.target { border-left: 3px solid var(--target); }
+  .chip.taken { border-left: 3px solid var(--taken); }
+  .chip.excluded { border-left: 3px solid var(--muted); text-decoration: line-through; }
+  .chip.ready { border-left: 3px solid var(--ready); }
+  .chip:hover { filter: brightness(0.96); }
+  .chip.absent { opacity: .6; }
+  .opts label { display: flex; gap: 6px; align-items: center; margin: 3px 0; cursor: pointer; }
+  details.group > summary { list-style: none; cursor: pointer; }
+  details.group > summary::-webkit-details-marker { display: none; }
+  details.group > summary h2::after { content: '▸'; font-size: 11px; transition: transform .15s; }
+  details.group[open] > summary h2::after { transform: rotate(90deg); }
+  .legend { display: grid; grid-template-columns: 18px 1fr; gap: 4px 8px; font-size: 12.5px; color: var(--muted); align-items: center; }
+  .sw { width: 16px; height: 12px; border-radius: 3px; border: 2px solid; }
+  .hint { font-size: 12px; color: var(--muted); }
+  .hint kbd { font: 11px ui-monospace, monospace; background: var(--chip); border: 1px solid var(--border); border-radius: 3px; padding: 0 4px; }
+  button { font: inherit; cursor: pointer; color: var(--text); }
+  .linkbtn { border: 0; background: none; color: var(--muted); padding: 0; text-decoration: underline; }
+  .group h2 .linkbtn { font-size: 11px; }
+  #about { margin-top: auto; border-top: 1px solid var(--border); padding-top: 12px; font-size: 12px; color: var(--muted); }
+  #about p { margin: 0 0 6px; }
+  #about b { color: var(--text); }
+  #about a { color: var(--ready); }
+  #about summary { cursor: pointer; }
+  #about hr { border: 0; border-top: 1px solid var(--border); margin: 10px 0; }
+  #about .credit { margin: 0; font-style: italic; }
+  #about ul { margin: 6px 0; padding-left: 16px; }
+  #about li { margin-bottom: 4px; }
+  #share-dialog { background: var(--panel); color: var(--text); border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 12px 40px var(--shadow); padding: 18px; width: min(480px, calc(100vw - 32px)); }
+  #share-dialog::backdrop { background: rgba(0,0,0,.45); }
+  #share-dialog h3 { margin: 0 0 6px; font-size: 16px; }
+  #share-dialog .hint { margin: 0 0 12px; }
+  #share-dialog .share-row { display: flex; gap: 6px; margin-bottom: 8px; }
+  #share-dialog input { flex: 1; min-width: 0; padding: 7px 9px; border: 1px solid var(--border); border-radius: 6px; font: 12px ui-monospace, monospace; background: var(--input); color: var(--text); }
+  #share-dialog button { border: 1px solid var(--border); background: var(--chip); border-radius: 6px; padding: 6px 12px; }
+  #share-dialog button.primary { background: var(--ready); border-color: var(--ready); color: #fff; font-weight: 600; }
+  #share-dialog #share-msg { min-height: 1.2em; margin: 0 0 10px; }
+  #share-dialog form { text-align: right; margin: 0; }
+  #summary { font-size: 13px; color: var(--muted); }
+  #summary b { color: var(--text); }
+  #main { flex: 1; position: relative; min-width: 0; }
+  #cy { position: absolute; inset: 0; }
+  #status { position: absolute; top: 12px; left: 12px; background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 13px; color: var(--muted); pointer-events: none; }
+  #status:empty { display: none; }
+  #toolbar { position: absolute; top: 12px; right: 12px; display: flex; gap: 6px; z-index: 36; }
+  #toolbar button, #zoom button { background: var(--panel); border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; box-shadow: 0 1px 3px var(--shadow); }
+  #toolbar button:hover, #zoom button:hover { background: var(--chip); }
+  #zoom { position: absolute; bottom: 14px; right: 12px; display: flex; flex-direction: column; gap: 4px; }
+  #zoom button { width: 34px; height: 32px; padding: 0; font-size: 16px; }
+  #toast { position: absolute; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--text); color: var(--bg); border-radius: 8px; padding: 8px 10px 8px 14px; font-size: 13px; display: none; align-items: center; gap: 12px; box-shadow: 0 6px 20px var(--shadow); z-index: 50; white-space: nowrap; }
+  #toast button { background: none; border: 0; color: inherit; font-weight: 700; text-decoration: underline; padding: 0 4px; }
+  #empty { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--muted); text-align: center; pointer-events: none; padding: 24px; }
+  /* info card docked bottom-left so it never covers the highlighted tree */
+  #tip { position: absolute; z-index: 30; left: 12px; bottom: 14px; pointer-events: none; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 22px var(--shadow); padding: 9px 11px; width: min(360px, calc(100% - 76px)); max-height: 45%; overflow: hidden; font-size: 13px; display: none; }
+  #tip .t { font-weight: 600; }
+  #tip .m { color: var(--muted); font-size: 12px; margin-top: 3px; }
+  #tip .p { margin-top: 6px; font-size: 12px; }
+  #tip ul { margin: 2px 0 0; padding-left: 16px; }
+  #menu { position: absolute; z-index: 40; background: var(--panel); border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 22px var(--shadow); padding: 4px; display: none; min-width: 190px; }
+  #menu .hd { padding: 6px 10px 4px; font-weight: 600; font-size: 13px; }
+  #menu button { display: block; width: 100%; text-align: left; border: 0; background: none; padding: 6px 10px; border-radius: 5px; }
+  #menu button:hover { background: var(--chip); }
+  #detail { position: absolute; top: 0; right: 0; bottom: 0; width: 400px; max-width: 100%; background: var(--panel); border-left: 1px solid var(--border); box-shadow: -6px 0 20px var(--shadow); padding: 18px; overflow-y: auto; display: none; z-index: 48; }
+  #detail h3 { margin: 0 30px 4px 0; font-size: 18px; }
+  #detail .close { position: sticky; top: 0; float: right; margin: -6px -6px 6px 10px; border: 1px solid var(--border); background: var(--chip); border-radius: 6px; padding: 4px 10px; font-size: 13px; z-index: 1; }
+  #detail .close:hover { background: var(--border); }
+  #detail .sec { margin-top: 14px; }
+  #detail .sec h4 { margin: 0 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  #detail .acts { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  #detail .acts button { border: 1px solid var(--border); background: var(--chip); border-radius: 6px; padding: 4px 9px; font-size: 13px; }
+  #detail ul { margin: 0; padding-left: 18px; }
+  #detail a { color: var(--ready); }
+  .side-toggle { display: none; float: right; font-size: 12px; font-weight: 400; margin-top: 3px; }
+  @media (max-width: 760px) {
+    body { flex-direction: column; }
+    #side { width: auto; max-height: 45vh; border-right: 0; border-bottom: 1px solid var(--border); padding: 12px 16px; gap: 14px; }
+    #main { flex: 1; min-height: 0; }
+    .side-toggle { display: inline; }
+    body.side-min #side > :not(h1) { display: none; }
+    body.side-min #side h1 small { display: none; }
+  }
+</style>
+</head>
+<body>
+<aside id="side">
+  <h1>SFU Prereq Planner <button class="linkbtn side-toggle" id="btn-side" title="Show or hide the plan panel">hide panel</button><small>Visualize prerequisites for the courses you want</small></h1>
+
+  <div class="group">
+    <h2>Courses I want to take</h2>
+    <div class="adder"><input id="in-target" placeholder="e.g. CMPT 433, CMPT 340" autocomplete="off"><div class="suggest"></div></div>
+    <div class="chips" id="chips-target"></div>
+  </div>
+
+  <div class="group" id="ready-group" hidden>
+    <h2>Ready to take now</h2>
+    <div id="summary"></div>
+    <div class="chips" id="chips-ready"></div>
+  </div>
+
+  <div class="group">
+    <h2>Already taken <button class="linkbtn" id="clear-taken" title="Remove all (undoable)">clear all</button></h2>
+    <div class="adder"><input id="in-taken" placeholder="Add or paste a list…" autocomplete="off"><div class="suggest"></div></div>
+    <div class="chips" id="chips-taken"></div>
+  </div>
+
+  <div class="group">
+    <h2 title="Removed from '1 of' choices, e.g. another program's courses">Won't take</h2>
+    <div class="adder"><input id="in-excluded" placeholder="Drop from “1 of” choices, e.g. ENSC 351" autocomplete="off"><div class="suggest"></div></div>
+    <div class="chips" id="chips-excluded"></div>
+  </div>
+
+  <details class="group opts" data-ui="options">
+    <summary><h2>Display options</h2></summary>
+    <label><input type="checkbox" id="opt-hide-taken"> Hide completed courses</label>
+    <label><input type="checkbox" id="opt-hide-perm" checked> Hide "permission" alternatives</label>
+    <label title="Courses with no offering in roughly the last two years are dropped from '1 of' choices. They still show if they're the only way to meet a requirement."><input type="checkbox" id="opt-hide-stale" checked> Hide retired options (not offered in 2+ years)</label>
+  </details>
+
+  <details class="group" data-ui="legend" open>
+    <summary><h2>Legend &amp; tips</h2></summary>
+    <div class="legend">
+      <span class="sw" style="border-color:var(--target);background:var(--target-bg)"></span><span>Goal course</span>
+      <span class="sw" style="border-color:var(--ready);background:var(--ready-bg)"></span><span>Ready to take now</span>
+      <span class="sw" style="border-color:var(--need);background:var(--node-bg)"></span><span>Still needed</span>
+      <span class="sw" style="border-color:var(--taken);background:var(--taken-bg)"></span><span>Completed</span>
+      <span class="sw" style="border-color:var(--junction);background:var(--junction-bg);border-radius:8px"></span><span>Choose one of / all of</span>
+      <span class="sw" style="border-color:var(--special);background:var(--special-bg);border-style:dashed"></span><span>Other requirement / unknown course</span>
+      <span class="sw" style="border-color:var(--special);background:var(--special-bg);border-style:dotted"></span><span>Not offered in 2+ years</span>
+      <span style="text-align:center;font-weight:700">*</span><span>Prereqs updated from SFU's current outline (verify)</span>
+    </div>
+    <p class="hint">Hover a course to highlight what it needs (and what it unlocks). Click for actions, double-click to toggle taken. Hover a chip to find it in the graph.<br>
+      <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo · <kbd>F</kbd> fit · <kbd>/</kbd> add a goal · <kbd>Tab</kbd> to a chip, <kbd>D</kbd> for details</p>
+  </details>
+
+  <footer id="about">
+    <p><b>⚠ Double-check before you enroll.</b> Prerequisite data can be incomplete or out of date, so confirm with the <a href="https://www.sfu.ca/students/calendar.html" target="_blank" rel="noopener">SFU Calendar</a>.</p>
+    <details data-ui="about">
+      <summary>About the data</summary>
+      <ul>
+        <li>Course info comes from <a href="https://api.sfucourses.com" target="_blank" rel="noopener">sfucourses.com</a>. Each course's prerequisites are re-checked against SFU's official outline for its latest offering.</li>
+        <li><b>*</b> marks courses whose requirements were read from SFU's wording by this tool (because sfucourses was out of date or had none). Those are best-effort.</li>
+        <li>Only course requirements are drawn. Unit counts (“60 units”), minimum grades, high-school courses and program-specific conditions are left out, so “ready” only means you have the course prereqs.</li>
+        <li>Corequisites aren't drawn either; they're listed in the hover and details for the few courses that have them.</li>
+        <li>“Retired” means not offered in about 2 years. Offering history only goes back to Spring 2024.</li>
+      </ul>
+      <p><span id="data-info">Loading…</span> · <button class="linkbtn" id="btn-refresh" title="Clear the local cache and download fresh data">refresh data</button></p>
+    </details>
+    <hr>
+    <p class="credit">This tool was created with Claude. This is just a silly 'that would be kinda useful' thing that (hopefully) works.</p>
+  </footer>
+</aside>
+
+<main id="main">
+  <div id="cy"></div>
+  <div id="empty">Add a course you want to take to see its prerequisite tree.</div>
+  <div id="status">Loading course data…</div>
+  <div id="toolbar"><button id="btn-share" title="Get a link that opens this plan">🔗 Share plan</button><button id="btn-theme" title="Switch theme"></button></div>
+  <dialog id="share-dialog" aria-labelledby="share-title">
+    <h3 id="share-title">Share this plan</h3>
+    <p class="hint">Anyone who opens this link sees your goals, taken courses and “won't take” list. It replaces their own lists, and they can undo that.</p>
+    <div class="share-row"><input readonly aria-label="Share link"><button id="share-copy" class="primary">Copy link</button></div>
+    <p class="hint" id="share-msg" aria-live="polite"></p>
+    <form method="dialog"><button>Close</button></form>
+  </dialog>
+  <div id="zoom">
+    <button id="btn-zin" title="Zoom in">+</button>
+    <button id="btn-zout" title="Zoom out">−</button>
+    <button id="btn-fit" title="Fit graph (F)">⤢</button>
+  </div>
+  <div id="toast"><span></span><button>Undo</button></div>
+  <div id="tip"></div>
+  <div id="menu"></div>
+  <div id="detail"></div>
+</main>
+
+<script>
+const API = 'https://api.sfucourses.com/v1/rest';
+const STORE_KEY = 'sfu-prereq-planner-v1';
+
+// ---------- state ----------
+const state = { targets: [], taken: [], excluded: [], hideTaken: false, hidePerm: true, hideStale: true };
+try { Object.assign(state, JSON.parse(localStorage.getItem(STORE_KEY) || '{}')); } catch (e) {}
+function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {} }
+
+const SFU = 'https://www.sfu.ca/bin/wcm/course-outlines';
+
+let PREREQS = {};        // "CMPT 433" -> parsed tree from sfucourses
+let COURSES = new Map(); // "CMPT 433" -> full sfucourses outline (title, units, prerequisites, offerings, ...)
+
+// ---------- data: caching + polite fetching ----------
+// Neither API sends cache headers, so without this the browser would re-download everything on every visit.
+const HOUR = 36e5, DAY = 24 * HOUR;
+const idb = (() => {
+  let dbp;
+  const open = () => dbp || (dbp = new Promise((res, rej) => {
+    const r = indexedDB.open('sfu-prereq-planner', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('kv');
+    r.onsuccess = () => res(r.result);
+    r.onerror = () => rej(r.error);
+  }));
+  const op = (mode, fn) => open().then(db => new Promise(res => {
+    const q = fn(db.transaction('kv', mode).objectStore('kv'));
+    q.onsuccess = () => res(q.result);
+    q.onerror = () => res(undefined);
+  })).catch(() => undefined);
+  return {
+    get: k => op('readonly', s => s.get(k)),
+    set: (k, v) => op('readwrite', s => s.put(v, k)),
+    clear: () => op('readwrite', s => s.clear()),
+  };
+})();
+
+// at most 3 requests in flight, so expanding a big graph never bursts either server
+const queue = [];
+let inFlight = 0;
+function politeFetch(url) {
+  return new Promise((resolve, reject) => { queue.push({ url, resolve, reject }); pump(); });
+}
+function pump() {
+  while (inFlight < 3 && queue.length) {
+    const { url, resolve, reject } = queue.shift();
+    inFlight++;
+    fetch(url)
+      .then(r => r.ok ? r.json() : r.status === 404 ? null : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then(resolve, reject)
+      .finally(() => { inFlight--; pump(); });
+  }
+}
+// a missing (404 -> null) result is only trusted for a day, e.g. an outline that SFU hasn't posted yet
+async function cachedJSON(key, url, maxAge) {
+  const hit = await idb.get(key);
+  if (hit && Date.now() - hit.t < (hit.v === null ? Math.min(maxAge, DAY) : maxAge)) return hit.v;
+  try {
+    const v = await politeFetch(url);
+    idb.set(key, { t: Date.now(), v });
+    return v;
+  } catch (e) {
+    if (hit) return hit.v; // stale beats nothing
+    throw e;
+  }
+}
+
+// Bulk sfucourses data, re-downloaded only when their /health says the data changed (checked at most hourly).
+// only well-formed data is cached or used, so one bad response (404 -> null, an error body) can't stick for a week
+const validBulk = b => !!b && Array.isArray(b.outlines) && b.outlines.length > 0 && !!b.prereqs && typeof b.prereqs === 'object';
+async function loadBulk() {
+  let cached = await idb.get('bulk');
+  if (!validBulk(cached)) cached = null;
+  let stamp = null;
+  try { stamp = (await cachedJSON('health', 'https://api.sfucourses.com/health', HOUR))?.lastDataUpdate || null; } catch (e) {}
+  if (cached && Date.now() - cached.t < 7 * DAY && (!stamp || cached.stamp === stamp)) return { ...cached, fromCache: true };
+  try {
+    const [outlines, prereqs] = await Promise.all([politeFetch(`${API}/outlines`), politeFetch(`${API}/prerequisites`)]);
+    const bulk = { t: Date.now(), stamp, outlines, prereqs };
+    if (!validBulk(bulk)) throw new Error('unexpected response from api.sfucourses.com');
+    idb.set('bulk', bulk);
+    return bulk;
+  } catch (e) {
+    if (cached) return { ...cached, fromCache: true };
+    throw e;
+  }
+}
+
+// ---------- offerings ----------
+const SEASON = { spring: 0, summer: 1, fall: 2 };
+function termKey(term) { const [s, y] = term.toLowerCase().split(' '); return +y * 3 + (SEASON[s] ?? 0); }
+function offeringsOf(id) {
+  const terms = new Set((COURSES.get(id)?.offerings || []).map(o => o.term));
+  return [...terms].sort((a, b) => termKey(b) - termKey(a)); // newest first
+}
+// not offered in the 6 terms (2 years) before the current one; the data only goes back to Spring 2024.
+// Measured from today, not the newest term in the data: that's often an already-scheduled future term.
+let LATEST = new Map(); // id -> termKey of its newest offering (absent = no offerings), built once at load
+const NOW = new Date();
+const CURRENT_TERM = NOW.getFullYear() * 3 + Math.floor(NOW.getMonth() / 4); // Jan-Apr spring, May-Aug summer, Sep-Dec fall
+function isStale(id) {
+  if (!COURSES.has(id)) return false;
+  const latest = LATEST.get(id);
+  return latest === undefined || latest < CURRENT_TERM - 6;
+}
+function offeringSummary(id) {
+  const terms = offeringsOf(id);
+  if (!terms.length) return 'No offerings since at least Spring 2024';
+  if (isStale(id)) return `Not offered since ${terms[0]}`;
+  return 'Offered ' + terms.slice(0, 3).join(', ') + (terms.length > 3 ? '…' : '');
+}
+
+const norm = s => s.trim().toUpperCase().replace(/\s+/g, ' ');
+const isCourseId = id => /^[A-Z]{2,5} \d{3}[A-Z]?$/.test(id);
+const has = (arr, id) => arr.includes(id);
+
+// Course codes in free text. Only real departments count, so "MATH 151 and 152" doesn't yield "AND 152";
+// a number after "and"/"or"/"," reuses the previous department instead ("MATH 151 and 152" -> MATH 152).
+let DEPTS = new Set(); // filled at load
+function parseCourses(text) {
+  const out = [];
+  const re = /\b([A-Za-z]{2,5})\s*-?\s*(\d{3}[A-Za-z]?)\b|(?:,|\b(?:and|or))\s*(\d{3}[A-Za-z]?)\b/gi;
+  let m, dept = null;
+  while ((m = re.exec(text))) {
+    const d = m[1] && m[1].toUpperCase();
+    if (d && DEPTS.has(d)) { dept = d; out.push(`${d} ${m[2].toUpperCase()}`); }
+    else if (dept) { const num = m[2] || m[3]; if (/^(AND|OR)$/.test(d || '') || m[3]) out.push(`${dept} ${num.toUpperCase()}`); }
+  }
+  return [...new Set(out)];
+}
+
+function label(id) {
+  if (id.startsWith('UNITS:')) return `${id.slice(6)} units`;
+  if (id.startsWith('PERMISSION:')) return 'Permission';
+  return id;
+}
+
+// ---------- prereq text parser ----------
+// Used when SFU's current outline disagrees with sfucourses, or sfucourses has no parsed tree.
+// Best effort: handles "A and (B or C)", "Either (...) or (...)", "one of X, Y, Z", and bare numbers
+// that inherit the previous department ("CMPT 125, 126, 128").
+
+function parseRequirementText(text) {
+  const toks = [];
+  // bare numbers inherit the previous dept ("CMPT 125, 126"), except unit counts ("100 units")
+  const re = /\(|\)|\b(?:[Aa]nd|[Oo]r)\b|\b(?:[Oo]ne|[Aa]ny|[Ee]ither) of\b|,|;|\b([A-Z]{2,5})\s?(\d{3}[A-Z]?)\b|\b(\d{3}[A-Z]?)\b(?!\s*(?:units|credits)\b)/g;
+  let m, dept = null;
+  // only the first sentence; later ones are usually substitutions/notes mentioning unrelated courses
+  let src = text.split(/\.\s+(?=[A-Z])/)[0];
+  const cut = src.search(/\b(may be substituted|recommended|students with credit|cannot take|equivalent)\b/i);
+  if (cut >= 0) src = src.slice(0, cut);
+  while ((m = re.exec(src))) {
+    if (m[1]) { dept = m[1].toUpperCase(); toks.push({ t: 'c', id: `${dept} ${m[2].toUpperCase()}` }); }
+    else if (m[3]) { if (dept && /^\d/.test(m[3]) && toks.length && toks[toks.length - 1].t !== ')') toks.push({ t: 'c', id: `${dept} ${m[3].toUpperCase()}` }); }
+    else toks.push({ t: m[0].toLowerCase().replace(/\s+/g, ' ') });
+  }
+  let i = 0;
+  const peek = () => toks[i] && toks[i].t;
+  function list() {
+    // items separated by , ; and/or. A list's join op is the first explicit and/or seen; default 'and'.
+    const items = [], ops = [];
+    let oneOf = false;
+    while (i < toks.length && peek() !== ')') {
+      const k = peek();
+      if (k === 'one of' || k === 'any of' || k === 'either of') { oneOf = true; i++; continue; }
+      if (k === 'and' || k === 'or') { ops.push(k); i++; continue; }
+      if (k === ',' || k === ';') { ops.push(','); i++; continue; }
+      if (k === '(') { i++; const s = list(); if (peek() === ')') i++; if (s) items.push(s); continue; }
+      if (k === 'c') { items.push({ type: 'course', id: toks[i].id }); i++; continue; }
+      i++;
+    }
+    if (!items.length) return null;
+    if (items.length === 1) return items[0];
+    // mixed and/or at one level: split on 'or' when explicit ors are separated by explicit ands is rare; use precedence and > or
+    const hasOr = ops.includes('or'), hasAnd = ops.includes('and');
+    if (oneOf || (hasOr && !hasAnd)) return { type: 'or', children: items };
+    if (hasAnd && !hasOr) return { type: 'and', children: items };
+    // both present: group by 'or' with 'and'/',' binding tighter
+    const groups = [[items[0]]];
+    let k = 0;
+    for (const op of ops) {
+      if (k + 1 >= items.length) break;
+      if (op === 'or') groups.push([]);
+      groups[groups.length - 1].push(items[++k]);
+    }
+    const g = groups.filter(x => x.length).map(x => x.length === 1 ? x[0] : { type: 'and', children: x });
+    return g.length === 1 ? g[0] : { type: 'or', children: g };
+  }
+  return list();
+}
+
+// ---------- resolving prereqs against SFU's official outlines ----------
+// sfucourses sometimes serves an old term's prerequisite text (e.g. CMPT 433 lacked ENSC 351), so for every
+// course in the graph we read the outline for its most recent offering straight from SFU.
+//   source 'api':  SFU agrees with sfucourses (same courses mentioned) -> use sfucourses' parsed tree
+//   source 'sfu':  SFU's current text differs -> parse SFU's text ourselves (flagged *)
+//   source 'text': SFU unavailable and sfucourses has no tree -> parse sfucourses' text (flagged *)
+const RESOLVED = {}; // id -> { tree, source, text, term, oldText }
+const resolving = new Set();
+
+function codesOf(tree, out = new Set()) {
+  if (!tree) return out;
+  if (tree.type === 'course') { if (isCourseId(tree.id)) out.add(tree.id); }
+  else (tree.children || []).forEach(c => codesOf(c, out));
+  return out;
+}
+const sameSet = (a, b) => a.size === b.size && [...a].every(x => b.has(x));
+const squash = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+
+async function sfuOutline(id) {
+  const [dept, num] = id.toLowerCase().split(' ');
+  for (const term of offeringsOf(id).slice(0, 3)) { // future terms can 404 until outlines are posted
+    const [season, year] = term.toLowerCase().split(' ');
+    const base = `${SFU}?${year}/${season}/${dept}/${num}`;
+    const sections = await cachedJSON(`sfu:${base}`, base, 7 * DAY).catch(() => null);
+    if (!Array.isArray(sections) || !sections.length) continue;
+    const sec = sections.find(s => s.classType === 'e') || sections[0];
+    const o = await cachedJSON(`sfu:${base}/${sec.value}`, `${base}/${sec.value}`, 7 * DAY).catch(() => null);
+    if (o && o.info) return { text: o.info.prerequisites || '', term };
+  }
+  return null;
+}
+
+function resolvePrereqs(id) {
+  if (resolving.has(id) || id in RESOLVED || !isCourseId(id) || !COURSES.has(id)) return;
+  resolving.add(id);
+  updateSyncStatus();
+  const api = PREREQS[id] || null;
+  const oldText = COURSES.get(id).prerequisites || '';
+  sfuOutline(id).catch(() => null).then(sfu => {
+    const text = sfu ? sfu.text : oldText;
+    const parsed = /[A-Z]{2,5}\s?\d{3}/.test(text) ? parseRequirementText(text) : null;
+    let r;
+    if (api && (squash(text) === squash(oldText) || sameSet(codesOf(api), codesOf(parsed)))) r = { tree: api, source: 'api' };
+    else if (parsed) r = { tree: parsed, source: sfu ? 'sfu' : 'text' };
+    else if (sfu && codesOf(api).size) r = { tree: null, source: 'sfu' }; // SFU no longer lists course prereqs
+    else r = { tree: api, source: 'api' };
+    RESOLVED[id] = { ...r, text, term: sfu && sfu.term, oldText };
+  }).catch(() => {
+    // never leave a course unresolved: prereqsOf would retry on every render, looping forever
+    RESOLVED[id] = { tree: api, source: 'api', text: oldText, oldText };
+  }).finally(() => {
+    resolving.delete(id);
+    updateSyncStatus();
+    scheduleRender();
+    if (detailId === id) openDetail(id); // the open panel was showing provisional sfucourses text
+  });
+}
+
+function prereqsOf(id) {
+  if (id in RESOLVED) return RESOLVED[id].tree;
+  resolvePrereqs(id);
+  return PREREQS[id] || null; // provisional until SFU answers
+}
+
+function updateSyncStatus() {
+  const el = document.getElementById('status');
+  if (resolving.size) el.textContent = `Checking ${resolving.size} course${resolving.size === 1 ? '' : 's'} against SFU's current outlines…`;
+  else if (el.textContent.startsWith('Checking')) el.textContent = '';
+}
+let renderQueued = false;
+function scheduleRender() {
+  if (renderQueued) return;
+  renderQueued = true;
+  setTimeout(() => { renderQueued = false; render(true); }, 50);
+}
+
+// ---------- requirement simplification ----------
+// Returns a simplified requirement tree given taken/excluded state, or EXCL if this branch is ruled out.
+// Options dropped from an OR are kept as `hidden: [{label, reason}]` on the result so the UI can say what's missing.
+const EXCL = { type: 'excluded' };
+
+function isPerm(id) { return id.startsWith('PERMISSION:'); }
+
+// why an option would be dropped from a "1 of" choice, or null if it's kept
+function hideReason(id) {
+  if (has(state.taken, id)) return null;
+  if (has(state.excluded, id)) return 'you marked it won\'t take';
+  if (state.hidePerm && isPerm(id)) return 'permission alternative';
+  if (state.hideStale && isCourseId(id) && !COURSES.has(id)) return 'no longer in SFU\'s catalogue';
+  if (state.hideStale && isStale(id)) return offeringSummary(id).replace(/^N/, 'n');
+  return null;
+}
+function describeHidden(n) {
+  const leaves = [];
+  (function walk(x) { if (x.type === 'course') leaves.push(x.id); else (x.children || []).forEach(walk); })(n);
+  const culprit = leaves.find(hideReason);
+  return { label: leaves.map(label).join(' + '), reason: culprit ? hideReason(culprit) : '' };
+}
+const withHidden = (node, hidden) => hidden.length ? { ...node, hidden: [...(node.hidden || []), ...hidden] } : node;
+
+function satisfied(n) {
+  if (!n) return true;
+  if (n.type === 'course') return has(state.taken, n.id);
+  if (n.type === 'and') return n.children.every(satisfied);
+  if (n.type === 'or') return n.children.some(satisfied);
+  if (n.type === 'none') return !!n.empty; // empty = nothing left to require; otherwise every option was ruled out
+  return false;
+}
+
+function simplify(n, inOr) {
+  if (!n) return null;
+  if (n.type === 'course') {
+    const id = n.id.includes(':') ? n.id : norm(n.id);
+    if (inOr && hideReason(id)) return EXCL;
+    return { type: 'course', id };
+  }
+  if (n.type === 'and') {
+    const kids = [], hidden = [];
+    for (const c of n.children || []) {
+      const s = simplify(c, inOr);
+      if (s === EXCL) return EXCL;
+      if (!s) continue;
+      // an OR keeps its own hidden list (it gets a junction); anything else hands it up to this AND
+      if (s.type !== 'or' && s.hidden) hidden.push(...s.hidden);
+      if (s.type === 'and') kids.push(...s.children); else kids.push(s);
+    }
+    if (!kids.length) return hidden.length ? { type: 'none', hidden, empty: true } : null;
+    return withHidden(kids.length === 1 ? kids[0] : { type: 'and', children: kids }, hidden);
+  }
+  if (n.type === 'or') {
+    const kids = [], hidden = [];
+    for (const c of n.children || []) {
+      const s = simplify(c, true);
+      if (s === EXCL) { hidden.push(describeHidden(c)); continue; }
+      if (!s) continue;
+      if (s.type === 'or') { kids.push(...s.children); hidden.push(...(s.hidden || [])); } else kids.push(s);
+    }
+    const sat = kids.find(satisfied);
+    if (sat) return sat; // already satisfied by something taken; show just that
+    if (!kids.length) return inOr ? EXCL : { type: 'none', hidden }; // every option ruled out
+    if (kids.length > 1) return withHidden({ type: 'or', children: kids }, hidden);
+    // collapsed to one option: remember what the hidden ones were alternatives to, since no "1 of" box will show,
+    // and that it's still a choice (so excluding it is meaningful)
+    const kept = describeHidden(kids[0]).label;
+    return withHidden({ ...kids[0], fromOr: true }, hidden.map(h => h.alt ? h : { ...h, alt: kept }));
+  }
+  return null;
+}
+
+// ---------- graph construction ----------
+function buildGraph() {
+  const nodes = new Map(); // id -> {id, kind, ...}
+  const edges = [];        // {source(prereq), target(dependent)}
+  const expanded = new Set();
+  let jn = 0;
+
+  function ensureCourse(id) {
+    if (!nodes.has(id)) {
+      const special = !isCourseId(id);
+      nodes.set(id, { id, kind: special ? 'special' : 'course', label: label(id), unknown: !special && !COURSES.has(id), stale: !special && isStale(id) });
+    }
+    return nodes.get(id);
+  }
+
+  // hidden options are attached to the node that shows the choice: its junction, or the course itself when
+  // hiding left a single option (and so no junction)
+  const noteHidden = (nodeId, hidden) => {
+    if (!hidden || !hidden.length) return;
+    const n = nodes.get(nodeId);
+    n.hidden = [...(n.hidden || []), ...hidden.filter(h => !(n.hidden || []).some(x => x.label === h.label))];
+  };
+
+  // inChoice: this requirement sits under a "1 of", so excluding one of its courses actually changes something
+  function addReq(owner, req, parentId, inChoice) {
+    if (!req) return;
+    inChoice = inChoice || !!req.fromOr;
+    if (req.type === 'course') {
+      noteHidden(parentId, req.hidden);
+      if (state.hideTaken && has(state.taken, req.id)) return;
+      const n = ensureCourse(req.id);
+      if (inChoice) n.optional = true;
+      edges.push({ source: req.id, target: parentId });
+      expand(req.id);
+    } else if (req.type === 'and' && parentId === owner) {
+      noteHidden(parentId, req.hidden);
+      req.children.forEach(c => addReq(owner, c, parentId, inChoice));
+    } else if (req.type === 'and' || req.type === 'or') {
+      const id = `__j${jn++}`;
+      nodes.set(id, { id, kind: 'junction', op: req.type, owner });
+      noteHidden(id, req.hidden);
+      edges.push({ source: id, target: parentId });
+      req.children.forEach(c => addReq(owner, c, id, inChoice || req.type === 'or'));
+      nodes.get(id).label = req.type === 'or' ? '1 of' : 'all of'; // hidden options are listed in the hover card
+    } else if (req.type === 'none') {
+      noteHidden(parentId, req.hidden);
+      if (!req.empty) nodes.get(owner).blocked = true;
+    }
+  }
+
+  function expand(id) {
+    if (expanded.has(id)) return;
+    expanded.add(id);
+    const n = ensureCourse(id);
+    if (has(state.taken, id)) return; // prereqs of completed courses are irrelevant
+    const raw = prereqsOf(id);
+    n.inferred = id in RESOLVED && RESOLVED[id].source !== 'api';
+    n.pending = !(id in RESOLVED) && COURSES.has(id);
+    const req = simplify(raw, false);
+    reqs.set(id, req);
+    n.ready = !n.pending && satisfied(req);
+    addReq(id, req, id);
+  }
+
+  const reqs = new Map(); // id -> simplified requirement, reused by the summary line
+  state.targets.forEach(t => { ensureCourse(t).target = true; expand(t); });
+  return { nodes, edges, reqs };
+}
+
+const junctionWidth = n => Math.max(50, Math.round(n.label.length * 6.2 + 14));
+
+// ---------- layout: strict levels, bottom (completed) to top ----------
+function layout(nodes, edges) {
+  const preds = new Map(), succs = new Map();
+  nodes.forEach((_, id) => { preds.set(id, []); succs.set(id, []); });
+  edges.forEach(e => { preds.get(e.target).push(e.source); succs.get(e.source).push(e.target); });
+
+  // level: completed = 0, otherwise 1 + max level of everything it needs (junctions pass through)
+  const level = new Map(), visiting = new Set();
+  function lv(id) {
+    if (level.has(id)) return level.get(id);
+    if (visiting.has(id)) return 0; // cycle guard
+    visiting.add(id);
+    const n = nodes.get(id);
+    const ps = preds.get(id).map(lv);
+    const m = ps.length ? Math.max(...ps) : 0;
+    let v;
+    if (n.kind === 'junction') v = m;
+    else if (has(state.taken, id)) v = 0;
+    else v = m + 1;
+    visiting.delete(id);
+    level.set(id, v);
+    return v;
+  }
+  nodes.forEach((_, id) => lv(id));
+
+  // layer index: courses every 4th row; a junction sits midway below its course (-2), and a junction
+  // nested in another junction one row below that (-1), so it never lands on a course row
+  const layer = new Map();
+  function ly(id) {
+    if (layer.has(id)) return layer.get(id);
+    const n = nodes.get(id);
+    let v;
+    if (n.kind !== 'junction') v = level.get(id) * 4;
+    else {
+      const parent = succs.get(id)[0];
+      v = ly(parent) - (nodes.get(parent).kind === 'junction' ? 1 : 2);
+    }
+    layer.set(id, v);
+    return v;
+  }
+  nodes.forEach((_, id) => ly(id));
+
+  // edges spanning several rows get invisible waypoint nodes in each row they cross,
+  // so the ordering step routes them around real nodes instead of behind them
+  const segs = [];
+  let dn = 0;
+  for (const e of edges) {
+    const a = layer.get(e.source), b = layer.get(e.target);
+    let prev = e.source;
+    for (let L = a + 1; L < b; L++) {
+      const id = `__d${dn++}`;
+      nodes.set(id, { id, kind: 'dummy' });
+      layer.set(id, L);
+      preds.set(id, [prev]); succs.set(id, []);
+      segs.push({ source: prev, target: id, of: e, last: false });
+      prev = id;
+    }
+    segs.push({ source: prev, target: e.target, of: e, last: true });
+  }
+  nodes.forEach((_, id) => { preds.set(id, []); succs.set(id, []); });
+  segs.forEach(s => { preds.get(s.target).push(s.source); succs.get(s.source).push(s.target); });
+
+  const rows = new Map();
+  // initial order: DFS from targets so related nodes start near each other
+  const seen = new Set();
+  function dfs(id) {
+    if (seen.has(id)) return; seen.add(id);
+    const L = layer.get(id);
+    if (!rows.has(L)) rows.set(L, []);
+    rows.get(L).push(id);
+    preds.get(id).forEach(dfs);
+  }
+  state.targets.filter(t => nodes.has(t)).forEach(dfs);
+  nodes.forEach((_, id) => dfs(id));
+
+  const GAP = 118;
+  const x = new Map();
+  const setIdx = () => rows.forEach(r => r.forEach((id, i) => x.set(id, (i - (r.length - 1) / 2) * GAP)));
+  setIdx();
+  const keys = [...rows.keys()].sort((a, b) => a - b);
+  const bary = id => {
+    const ns = [...preds.get(id), ...succs.get(id)];
+    return ns.length ? ns.reduce((s, n) => s + x.get(n), 0) / ns.length : x.get(id);
+  };
+  for (let it = 0; it < 12; it++) {
+    const order = it % 2 ? keys : [...keys].reverse();
+    for (const k of order) {
+      const r = rows.get(k);
+      const b = new Map(r.map(id => [id, bary(id)]));
+      r.sort((p, q) => b.get(p) - b.get(q));
+      r.forEach((id, i) => x.set(id, (i - (r.length - 1) / 2) * GAP));
+    }
+  }
+  // pull nodes toward their neighbours while keeping order and spacing
+  for (let it = 0; it < 6; it++) {
+    for (const k of keys) {
+      const r = rows.get(k);
+      const want = r.map(bary);
+      // push right to resolve overlaps, then shift the row so its mean matches the desired mean
+      const pos = [];
+      want.forEach((w, i) => pos.push(i ? Math.max(w, pos[i - 1] + gapFor(r[i - 1], r[i])) : w));
+      const shift = (want.reduce((a, b) => a + b, 0) - pos.reduce((a, b) => a + b, 0)) / r.length;
+      for (let i = 0; i < pos.length; i++) pos[i] += shift;
+      r.forEach((id, i) => x.set(id, pos[i]));
+    }
+  }
+  function gapFor(a, b) {
+    const w = id => { const n = nodes.get(id); return n.kind === 'junction' ? junctionWidth(n) : n.kind === 'dummy' ? 4 : 100; };
+    return (w(a) + w(b)) / 2 + 16;
+  }
+
+  const pos = new Map();
+  nodes.forEach((_, id) => pos.set(id, { x: x.get(id), y: -layer.get(id) * ROW }));
+  return { pos, level, segs };
+}
+const ROW = 31; // px per layer; courses are 4 layers (124px) apart
+const levelY = l => -l * 4 * ROW;
+
+// ---------- rendering ----------
+function graphStyle() {
+  const cs = getComputedStyle(document.documentElement);
+  const v = name => cs.getPropertyValue('--' + name).trim();
+  return [
+    { selector: 'node', style: {
+      'label': 'data(label)', 'text-valign': 'center', 'text-halign': 'center',
+      'font-size': 13, 'font-weight': 600, 'color': v('node-text'),
+      'shape': 'round-rectangle', 'width': 100, 'height': 34,
+      'background-color': v('node-bg'), 'border-width': 2, 'border-color': v('need'),
+      'transition-property': 'opacity', 'transition-duration': '120ms'
+    }},
+    { selector: 'node.ready', style: { 'border-color': v('ready'), 'background-color': v('ready-bg'), 'color': v('ready-text') } },
+    { selector: 'node.taken', style: { 'border-color': v('taken'), 'background-color': v('taken-bg'), 'color': v('taken-text') } },
+    { selector: 'node.target', style: { 'border-color': v('target'), 'border-width': 3, 'background-color': v('target-bg'), 'color': v('target-text') } },
+    { selector: 'node.target.taken', style: { 'border-color': v('taken'), 'background-color': v('taken-bg'), 'color': v('taken-text') } },
+    { selector: 'node.stale', style: { 'border-style': 'dotted', 'border-width': 2.5, 'border-color': v('special'), 'background-color': v('special-bg'), 'color': v('special-text') } },
+    { selector: 'node.special, node.unknown', style: { 'border-style': 'dashed', 'border-color': v('special'), 'background-color': v('special-bg'), 'color': v('special-text'), 'font-weight': 500 } },
+    { selector: 'node.special.taken', style: { 'border-color': v('taken'), 'background-color': v('taken-bg') } },
+    { selector: 'node.blocked', style: { 'border-color': v('blocked'), 'border-style': 'double', 'border-width': 4 } },
+    { selector: 'node.junction', style: {
+      'shape': 'round-rectangle', 'width': 'data(w)', 'height': 20, 'font-size': 10.5, 'font-weight': 600,
+      'background-color': v('junction-bg'), 'border-color': v('junction'), 'border-width': 1.5, 'color': v('junction-text')
+    }},
+    { selector: 'node.lane', style: {
+      'shape': 'rectangle', 'background-opacity': 0, 'border-width': 0, 'width': 1, 'height': 1,
+      'font-size': 11, 'font-weight': 600, 'color': v('lane'), 'text-halign': 'left', 'events': 'no'
+    }},
+    { selector: 'node.focus', style: { 'underlay-color': v('ready'), 'underlay-opacity': 0.35, 'underlay-padding': 7, 'underlay-shape': 'round-rectangle' } },
+    { selector: 'edge', style: {
+      'width': 1.6, 'line-color': v('edge'), 'target-arrow-color': v('edge'), 'target-arrow-shape': 'triangle',
+      'arrow-scale': 0.8, 'curve-style': 'bezier',
+      'transition-property': 'opacity', 'transition-duration': '120ms'
+    }},
+    { selector: 'node.dummy', style: { 'width': 0.1, 'height': 0.1, 'border-width': 0, 'padding': 0, 'background-opacity': 0, 'events': 'no', 'label': '' } },
+    { selector: 'edge.into-junction', style: { 'line-style': 'dashed', 'line-color': v('junction-edge'), 'target-arrow-shape': 'none' } },
+    { selector: 'edge.mid', style: { 'target-arrow-shape': 'none' } },
+    { selector: 'edge.hl', style: { 'line-color': v('edge-hl'), 'target-arrow-color': v('edge-hl'), 'width': 2.4 } },
+    { selector: 'edge.hl-up', style: { 'line-color': v('target'), 'target-arrow-color': v('target'), 'width': 2.4 } },
+    { selector: '.dim', style: { 'opacity': 0.15 } },
+  ];
+}
+
+// ---------- theme ----------
+const THEMES = ['auto', 'light', 'dark'];
+const darkQuery = matchMedia('(prefers-color-scheme: dark)');
+function applyTheme() {
+  const t = state.theme || 'auto';
+  if (t === 'auto') document.documentElement.removeAttribute('data-theme');
+  else document.documentElement.setAttribute('data-theme', t);
+  const effective = t === 'auto' ? (darkQuery.matches ? 'dark' : 'light') : t;
+  document.getElementById('btn-theme').textContent = { auto: `◐ Auto (${effective})`, light: '☀ Light', dark: '☾ Dark' }[t];
+  cy.style(graphStyle());
+}
+
+const cy = cytoscape({
+  container: document.getElementById('cy'),
+  wheelSensitivity: 0.25,
+  minZoom: 0.15, maxZoom: 3,
+  autoungrabify: true, // positions encode prerequisite order, so nodes aren't draggable (dragging the canvas still pans)
+  boxSelectionEnabled: false,
+});
+applyTheme(); // sets data-theme first, then builds the graph style from the resulting tokens
+darkQuery.addEventListener('change', applyTheme);
+
+let lastReqs = new Map();
+// background: a re-render the user didn't cause (SFU data arriving); it keeps their zoom/pan if they've moved the view
+function render(background) {
+  const { nodes, edges, reqs } = buildGraph();
+  lastReqs = reqs;
+  document.getElementById('empty').style.display = state.targets.length ? 'none' : 'flex';
+  const { pos, level, segs } = layout(nodes, edges);
+
+  const els = [];
+  nodes.forEach(n => {
+    if (n.kind === 'dummy') {
+      els.push({ group: 'nodes', data: { id: n.id, label: '' }, classes: 'dummy', position: pos.get(n.id) });
+      return;
+    }
+    const cls = [n.kind];
+    if (n.target) cls.push('target');
+    if (n.kind !== 'junction') {
+      if (has(state.taken, n.id)) cls.push('taken');
+      else if (n.ready) cls.push('ready');
+    }
+    if (n.unknown) cls.push('unknown');
+    if (n.stale && !has(state.taken, n.id)) cls.push('stale');
+    if (n.blocked) cls.push('blocked');
+    if (n.inferred) cls.push('inferred');
+    if (n.hidden) cls.push('has-hidden');
+    if (n.optional) cls.push('optional');
+    const data = { id: n.id, label: n.inferred ? n.label + ' *' : n.label, hidden: n.hidden || [] };
+    if (n.kind === 'junction') data.w = junctionWidth(n);
+    els.push({ group: 'nodes', data, classes: cls.join(' '), position: pos.get(n.id) });
+  });
+  segs.forEach((s, i) => els.push({
+    group: 'edges', data: { id: `e${i}`, source: s.source, target: s.target },
+    classes: [nodes.get(s.of.target).kind === 'junction' ? 'into-junction' : '', s.last ? '' : 'mid'].join(' ')
+  }));
+
+  // lane labels on the left
+  if (nodes.size) {
+    const xs = [...pos.values()].map(p => p.x);
+    const minX = Math.min(...xs) - 90;
+    const lvls = new Set([...nodes.values()].filter(n => n.kind === 'course' || n.kind === 'special').map(n => level.get(n.id)));
+    lvls.forEach(l => els.push({ group: 'nodes', data: { id: `__lane${l}`, label: l === 0 ? 'Completed' : `Step ${l}` }, classes: 'lane', position: { x: minX, y: levelY(l) }, selectable: false, grabbable: false }));
+  }
+
+  const before = cy.nodes().map(n => n.id()).sort().join('|');
+  cy.batch(() => { cy.elements().remove(); cy.add(els); });
+  // only refit when the set of nodes changed, so toggling a status doesn't jump the view
+  if (cy.nodes().map(n => n.id()).sort().join('|') !== before && !(background && viewTouched)) fitView();
+  // a background re-render (e.g. SFU data arriving) wipes element classes; restore the open menu's highlight
+  if (menuFor) {
+    const n = cy.$id(menuFor);
+    if (n.length) { highlight(n); showTip(n); } else hideMenu();
+  }
+  renderChips(); // chips reflect graph state (ready list, which chips are in the graph)
+}
+function fitView() {
+  cy.fit(cy.elements(), 40);
+  if (cy.zoom() > 1.3) { cy.zoom(1.3); cy.center(); }
+  viewTouched = false;
+}
+// set when the user pans/zooms themselves; programmatic fits reset it
+let viewTouched = false;
+['wheel', 'pointerdown', 'touchstart'].forEach(t => document.getElementById('cy').addEventListener(t, () => { viewTouched = true; }, { passive: true }));
+
+// ---------- hover highlight + tooltip ----------
+const tip = document.getElementById('tip');
+function highlight(n) {
+  clearHighlight();
+  const down = n.predecessors();   // what it needs
+  const up = n.successors();       // what it unlocks
+  cy.elements().not('.lane').addClass('dim');
+  n.removeClass('dim');
+  down.removeClass('dim'); up.removeClass('dim');
+  down.edges().addClass('hl'); up.edges().addClass('hl-up');
+}
+function clearHighlight() { cy.elements().removeClass('dim hl hl-up focus'); }
+
+cy.on('mouseover', 'node', ev => {
+  const n = ev.target;
+  if (n.hasClass('lane') || n.hasClass('dummy') || menuFor) return;
+  highlight(n);
+  showTip(n);
+});
+cy.on('mouseout', 'node', () => {
+  if (menuFor) return; // keep highlight + info card while the menu is open
+  clearHighlight();
+  tip.style.display = 'none';
+});
+cy.on('pan zoom', () => hideMenu());
+cy.on('dbltap', 'node', ev => {
+  const id = ev.target.id();
+  if (ev.target.hasClass('junction') || ev.target.hasClass('lane') || ev.target.hasClass('dummy')) return;
+  hideMenu();
+  toggle('taken', id);
+});
+
+// scroll a course into view and pulse it (used by sidebar chips)
+function focusNode(id) {
+  const n = cy.$id(id);
+  if (!n.length) return false;
+  cy.animate({ center: { eles: n }, zoom: Math.max(cy.zoom(), 0.9) }, { duration: 250 });
+  highlight(n); n.addClass('focus');
+  return true;
+}
+
+// prerequisite text to show for a course, where it came from, and any caveat about the edges
+function prereqInfo(id) {
+  const r = RESOLVED[id], c = COURSES.get(id);
+  const text = r ? r.text : (c?.prerequisites || '');
+  const src = r ? (r.term ? `SFU outline, ${r.term}` : 'sfucourses.com') : 'sfucourses.com, still checking SFU';
+  let note = '';
+  if (r?.source === 'sfu') note = `* SFU's current outline differs from sfucourses.com, which shows: “${r.oldText || 'none'}”. Edges were read from SFU's text, so double-check them.`;
+  else if (r?.source === 'text') note = '* No parsed requirement tree was available, so edges were read from the text above. Double-check them.';
+  return { text, src, note };
+}
+
+function showTip(n) {
+  const id = n.id();
+  const c = COURSES.get(id);
+  const status = has(state.taken, id) ? 'Completed' : n.hasClass('ready') ? 'Ready to take' : n.hasClass('blocked') ? 'All options excluded' : '';
+  const hs = n.data('hidden') || [];
+  const hiddenHtml = hs.length ? `<div class="p"><b>Hidden option${hs.length > 1 ? 's' : ''}:</b><ul>${
+    hs.map(h => `<li>${esc(h.label)}${h.alt ? ` instead of ${esc(h.alt)}` : ''}${h.reason ? ` (${esc(h.reason)})` : ''}</li>`).join('')
+  }</ul></div><div class="m">Show them via Display options, or by removing them from Won't take.</div>` : '';
+  let html;
+  if (n.hasClass('junction')) {
+    const or = n.data('label').startsWith('1 of');
+    html = `<div class="t">${or ? 'Choose one of the options below it' : 'Requires all of the courses below it'}</div>${hiddenHtml}`;
+  }
+  else if (!isCourseId(id)) html = `<div class="t">${esc(label(id))}</div><div class="p">${esc(id.split(':').slice(1).join(':'))}</div>`;
+  else if (!c) html = `<div class="t">${esc(id)}</div><div class="m">Not in the current catalogue</div>`;
+  else {
+    const pi = prereqInfo(id);
+    html = `<div class="t">${esc(id)} — ${esc(c.title)}</div>
+      <div class="m">${esc(c.units)} units${status ? ' · ' + status : ''}</div>
+      <div class="m">${esc(offeringSummary(id))}</div>
+      <div class="p">${pi.text ? `<b>Prereqs:</b> ${esc(pi.text)}` : '<i>No prerequisites listed</i>'}</div>
+      ${c.corequisites ? `<div class="p"><b>Coreqs:</b> ${esc(c.corequisites)}</div>` : ''}
+      ${hiddenHtml}
+      ${pi.note ? `<div class="m">${esc(pi.note)}</div>` : ''}`;
+  }
+  tip.innerHTML = html;
+  tip.style.display = 'block';
+}
+
+// ---------- click menu ----------
+const menu = document.getElementById('menu');
+let menuFor = null; // node id whose menu is open; keeps its highlight while choosing
+function hideMenu() {
+  if (menuFor) { clearHighlight(); tip.style.display = 'none'; }
+  menuFor = null;
+  menu.style.display = 'none';
+}
+cy.on('tap', ev => { if (ev.target === cy) { hideMenu(); clearHighlight(); tip.style.display = 'none'; closeDetail(); } });
+cy.on('tap', 'node', ev => {
+  const n = ev.target;
+  if (n.hasClass('junction') || n.hasClass('lane') || n.hasClass('dummy')) return;
+  const id = n.id();
+  hideMenu();
+  highlight(n);
+  showTip(n); // also how touch users get the info, since there's no hover
+  menuFor = id;
+  const items = [];
+  if (isCourseId(id)) items.push(['View details', () => openDetail(id)]);
+  items.push(has(state.taken, id) ? ['Unmark as taken', () => toggle('taken', id)] : [isCourseId(id) ? 'Mark as taken' : 'Mark as satisfied', () => toggle('taken', id)]);
+  if (isCourseId(id)) {
+    items.push(has(state.targets, id) ? ['Remove from goals', () => toggle('targets', id)] : ['Add to goals', () => toggle('targets', id)]);
+    // excluding only removes "1 of" options, so don't offer it for a course that's required outright
+    if (n.hasClass('optional') && !has(state.targets, id) && !has(state.taken, id)) items.push(["Exclude (I won't take this)", () => toggle('excluded', id)]);
+  }
+  menu.innerHTML = `<div class="hd">${esc(label(id))}</div>`;
+  items.forEach(([t, fn]) => {
+    const b = document.createElement('button'); b.textContent = t;
+    b.onclick = () => { hideMenu(); fn(); };
+    menu.appendChild(b);
+  });
+  // open beside the node (not below it, where its highlighted prereqs are), flipping left if there's no room
+  const p = n.renderedPosition(), half = n.renderedWidth() / 2 + 8;
+  menu.style.display = 'block';
+  const box = document.getElementById('main').getBoundingClientRect();
+  let left = p.x + half;
+  if (left + menu.offsetWidth > box.width - 8) left = p.x - half - menu.offsetWidth;
+  menu.style.left = Math.max(8, left) + 'px';
+  menu.style.top = Math.max(8, Math.min(p.y - menu.offsetHeight / 2, box.height - menu.offsetHeight - 8)) + 'px';
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') { hideMenu(); closeDetail(); } // the share <dialog> closes itself on Esc
+});
+
+// ---------- detail panel ----------
+const detail = document.getElementById('detail');
+let detailId = null; // course shown in the panel, so it can refresh when SFU data arrives
+function closeDetail() { detail.style.display = 'none'; detailId = null; }
+function openDetail(id) {
+  detail.style.display = 'block';
+  detailId = id;
+  const d = COURSES.get(id);
+  if (!d) { detail.innerHTML = `<button class="close" onclick="closeDetail()" title="Close (Esc)">✕ Close</button><h3>${esc(id)}</h3><p class="hint">No outline found for this course.</p>`; return; }
+  resolvePrereqs(id);
+  const pi = prereqInfo(id);
+  const offers = [...(d.offerings || [])].sort((a, b) => termKey(b.term) - termKey(a.term)).slice(0, 8)
+    .map(o => `<li>${esc(o.term)}${o.instructors && o.instructors.length ? ' — ' + esc(o.instructors.join(', ')) : ''}</li>`).join('');
+  detail.innerHTML = `
+    <button class="close" onclick="closeDetail()" title="Close (Esc)">✕ Close</button>
+    <h3>${esc(id)} — ${esc(d.title || '')}</h3>
+    <div class="hint">${esc(d.units)} units${d.designation && d.designation !== 'N/A' ? ' · ' + esc(d.designation) : ''}${d.deliveryMethod ? ' · ' + esc(d.deliveryMethod) : ''} · ${esc(offeringSummary(id))}</div>
+    <div class="acts" id="detail-acts"></div>
+    <div class="sec"><h4>Prerequisites <span style="text-transform:none;letter-spacing:0">(${esc(pi.src)})</span></h4>${pi.text ? esc(pi.text) : '<i>None listed</i>'}
+      ${pi.note ? `<p class="hint">${esc(pi.note)}</p>` : ''}</div>
+    ${d.corequisites ? `<div class="sec"><h4>Corequisites</h4>${esc(d.corequisites)}</div>` : ''}
+    <div class="sec"><h4>Description</h4>${esc(d.description || '')}</div>
+    ${d.notes ? `<div class="sec"><h4>Notes</h4>${esc(d.notes)}</div>` : ''}
+    ${offers ? `<div class="sec"><h4>Offerings</h4><ul>${offers}</ul></div>` : ''}
+    <div class="sec"><a href="https://sfucourses.com/explore/${id.toLowerCase().replace(' ', '-')}" target="_blank" rel="noopener">Open on sfucourses.com ↗</a></div>`;
+  const acts = document.getElementById('detail-acts');
+  const addAct = (t, fn) => { const b = document.createElement('button'); b.textContent = t; b.onclick = () => { fn(); openDetail(id); }; acts.appendChild(b); };
+  addAct(has(state.taken, id) ? 'Unmark taken' : 'Mark taken', () => toggle('taken', id));
+  addAct(has(state.targets, id) ? 'Remove from goals' : 'Add to goals', () => toggle('targets', id));
+}
+
+// ---------- undo ----------
+const undoStack = [];
+const toast = document.getElementById('toast');
+let toastTimer;
+function showToast(msg, undoable = true) {
+  toast.querySelector('span').textContent = msg;
+  toast.querySelector('button').style.display = undoable ? '' : 'none';
+  toast.style.display = 'flex';
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { toast.style.display = 'none'; }, 5000);
+}
+function checkpoint(msg) {
+  undoStack.push(JSON.stringify({ targets: state.targets, taken: state.taken, excluded: state.excluded }));
+  if (undoStack.length > 50) undoStack.shift();
+  showToast(msg);
+}
+function undo() {
+  const s = undoStack.pop();
+  if (!s) return showToast('Nothing to undo', false);
+  Object.assign(state, JSON.parse(s));
+  save(); render();
+  showToast('Undone', false);
+}
+toast.querySelector('button').onclick = undo;
+
+// ---------- sidebar ----------
+const VERBS = {
+  taken: ['Marked {} as taken', 'Unmarked {} as taken'],
+  targets: ['Added {} to goals', 'Removed {} from goals'],
+  excluded: ['Excluded {}', 'Stopped excluding {}'],
+};
+// state change only; callers save + render (so a pasted list costs one render, not one per course)
+function setIn(list, id, want) {
+  if (want) {
+    state[list] = [...state[list], id];
+    // a course can't be both taken and excluded
+    if (list === 'taken') state.excluded = state.excluded.filter(x => x !== id);
+    if (list === 'excluded') state.taken = state.taken.filter(x => x !== id);
+  } else state[list] = state[list].filter(x => x !== id);
+}
+function toggle(list, id, on) {
+  const present = state[list].includes(id);
+  const want = on === undefined ? !present : on;
+  if (want === present) return;
+  checkpoint(VERBS[list][want ? 0 : 1].replace('{}', label(id)));
+  setIn(list, id, want);
+  save(); render();
+}
+
+function makeChip(id, cls, btn) {
+  const chip = document.createElement('span');
+  const inGraph = cy.$id(id).length > 0;
+  chip.className = `chip ${cls}${inGraph ? '' : ' absent'}`;
+  const c = COURSES.get(id);
+  chip.title = (c ? c.title : label(id)) + (inGraph ? '' : ' (not in the graph)');
+  chip.innerHTML = `${esc(label(id))}<button title="${btn.title}">${btn.text}</button>`;
+  chip.querySelector('button').onclick = e => { e.stopPropagation(); btn.fn(); };
+  chip.onmouseenter = () => { const n = cy.$id(id); if (n.length && !menuFor) { highlight(n); n.addClass('focus'); showTip(n); } };
+  chip.onmouseleave = () => { if (!menuFor) { clearHighlight(); tip.style.display = 'none'; } };
+  chip.onclick = () => { if (!focusNode(id) && isCourseId(id)) openDetail(id); };
+  // keyboard: Tab to a chip, Enter/Space finds it in the graph, D opens its details
+  chip.tabIndex = 0;
+  chip.setAttribute('role', 'button');
+  chip.onfocus = chip.onmouseenter;
+  chip.onblur = chip.onmouseleave;
+  chip.onkeydown = e => {
+    if (e.target !== chip) return;
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); chip.onclick(); }
+    else if (e.key.toLowerCase() === 'd' && isCourseId(id)) { e.preventDefault(); openDetail(id); }
+  };
+  return chip;
+}
+
+// Rough count of untaken courses needed for all goals, taking the cheapest option in each "1 of".
+// Greedy (shared prereqs make the true minimum expensive), but good enough for a summary line.
+function fewestCoursesLeft() {
+  const memo = new Map(), visiting = new Set();
+  function need(req) {
+    if (!req || req.type === 'none') return new Set();
+    if (req.type === 'course') return needCourse(req.id);
+    if (req.type === 'and') return new Set(req.children.flatMap(c => [...need(c)]));
+    return req.children.map(need).reduce((a, b) => (b.size < a.size ? b : a));
+  }
+  function needCourse(id) {
+    if (has(state.taken, id) || !isCourseId(id)) return new Set();
+    if (memo.has(id)) return memo.get(id);
+    if (visiting.has(id)) return new Set([id]);
+    visiting.add(id);
+    const s = new Set([id, ...need(lastReqs.has(id) ? lastReqs.get(id) : simplify(prereqsOf(id), false))]);
+    visiting.delete(id);
+    memo.set(id, s);
+    return s;
+  }
+  return new Set(state.targets.flatMap(t => [...needCourse(t)])).size;
+}
+
+function renderChips() {
+  for (const [list, el] of [['targets', 'chips-target'], ['taken', 'chips-taken'], ['excluded', 'chips-excluded']]) {
+    const box = document.getElementById(el);
+    box.innerHTML = '';
+    [...state[list]].sort().forEach(id =>
+      box.appendChild(makeChip(id, list === 'targets' ? 'target' : list, { title: 'Remove', text: '×', fn: () => toggle(list, id, false) })));
+  }
+  // ready-now panel: untaken catalogue courses in the graph whose requirements are met
+  const ready = cy.nodes('.course.ready').not('.unknown, .taken').map(n => n.id()).sort();
+  const left = fewestCoursesLeft();
+  document.getElementById('ready-group').hidden = !state.targets.length;
+  document.getElementById('summary').innerHTML = left
+    ? `At least <b>${left}</b> course${left === 1 ? '' : 's'} left to take · <b>${ready.length}</b> ready now`
+    : 'All goals completed 🎉';
+  const rbox = document.getElementById('chips-ready');
+  rbox.innerHTML = '';
+  ready.forEach(id => rbox.appendChild(makeChip(id, 'ready', { title: 'Mark as taken', text: '✓', fn: () => toggle('taken', id, true) })));
+}
+
+function setupAdder(inputId, list) {
+  const input = document.getElementById(inputId);
+  const box = input.nextElementSibling;
+  let items = [], sel = 0;
+  const close = () => { box.style.display = 'none'; items = []; };
+  const commit = (ids) => {
+    const fresh = ids.filter(id => !state[list].includes(id));
+    if (fresh.length > 1) {
+      checkpoint(`Added ${fresh.length} courses`);
+      fresh.forEach(id => setIn(list, id, true));
+      save(); render();
+    } else if (fresh.length) toggle(list, fresh[0], true);
+    input.value = ''; close();
+  };
+  input.addEventListener('input', () => {
+    const q = input.value.trim().toUpperCase().replace(/\s+/g, ' ');
+    if (q.length < 2 || /[,;\n]/.test(q)) return close();
+    const qc = q.replace(' ', '');
+    const numOnly = /^\d/.test(q); // "431" -> every department's 431 (and 431W, ...)
+    // rank: code prefix, then number prefix, then title match
+    const rank = (id, c) => id.replace(' ', '').startsWith(qc) ? 0
+      : numOnly && id.split(' ')[1].startsWith(q) ? 1
+      : q.length >= 3 && c.title.toUpperCase().includes(q) ? 2 : -1;
+    const hits = [];
+    for (const [id, c] of COURSES) {
+      const r = rank(id, c);
+      if (r >= 0) hits.push([r, id]);
+    }
+    hits.sort((a, b) => a[0] - b[0] || a[1].localeCompare(b[1]));
+    items = hits.slice(0, 30).map(h => h[1]);
+    sel = 0;
+    if (!items.length) return close();
+    box.innerHTML = items.map((id, i) => `<div data-i="${i}" class="${i === 0 ? 'on' : ''}"><b>${esc(id)}</b> ${esc(COURSES.get(id).title)}</div>`).join('');
+    box.style.display = 'block';
+  });
+  box.addEventListener('mousedown', e => {
+    const d = e.target.closest('div[data-i]');
+    if (d) { e.preventDefault(); commit([items[+d.dataset.i]]); }
+  });
+  input.addEventListener('keydown', e => {
+    if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+      if (!items.length) return;
+      e.preventDefault();
+      sel = (sel + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+      [...box.children].forEach((c, i) => c.classList.toggle('on', i === sel));
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      const parsed = parseCourses(input.value);
+      // multiple codes typed/pasted -> add them all; otherwise take the highlighted suggestion
+      if (parsed.length > 1 || (parsed.length === 1 && !items.length)) commit(parsed);
+      else if (items.length) commit([items[sel]]);
+    } else if (e.key === 'Escape') close();
+  });
+  input.addEventListener('paste', e => {
+    const text = (e.clipboardData || window.clipboardData).getData('text');
+    const parsed = parseCourses(text);
+    if (parsed.length > 1) { e.preventDefault(); commit(parsed); }
+  });
+  input.addEventListener('blur', () => setTimeout(close, 100));
+}
+
+function esc(s) { return String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+// ---------- boot ----------
+setupAdder('in-target', 'targets');
+setupAdder('in-taken', 'taken');
+setupAdder('in-excluded', 'excluded');
+document.getElementById('btn-fit').onclick = fitView;
+const zoomBy = f => { viewTouched = true; cy.zoom({ level: cy.zoom() * f, renderedPosition: { x: cy.width() / 2, y: cy.height() / 2 } }); };
+document.getElementById('btn-zin').onclick = () => zoomBy(1.25);
+document.getElementById('btn-zout').onclick = () => zoomBy(0.8);
+document.getElementById('btn-theme').onclick = () => {
+  state.theme = THEMES[(THEMES.indexOf(state.theme || 'auto') + 1) % THEMES.length];
+  save(); applyTheme();
+};
+document.getElementById('clear-taken').onclick = () => {
+  if (!state.taken.length) return;
+  checkpoint(`Cleared ${state.taken.length} taken courses`);
+  state.taken = []; save(); render();
+};
+document.addEventListener('keydown', e => {
+  const el = document.activeElement;
+  const inText = el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.type !== 'checkbox');
+  // Ctrl+Z is ours unless there's text to undo in the field (focus stays in the empty input after adding a course)
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !(inText && el.value)) { e.preventDefault(); undo(); }
+  else if (inText || e.ctrlKey || e.metaKey || e.altKey) return;
+  else if (e.key === 'f') fitView();
+  else if (e.key === '/') { e.preventDefault(); document.getElementById('in-target').focus(); }
+});
+for (const [elId, key] of [['opt-hide-taken', 'hideTaken'], ['opt-hide-perm', 'hidePerm'], ['opt-hide-stale', 'hideStale']]) {
+  const box = document.getElementById(elId);
+  box.checked = state[key];
+  box.onchange = () => { state[key] = box.checked; save(); render(); };
+}
+// remember which collapsible sections are open
+state.ui = state.ui || {};
+document.querySelectorAll('details[data-ui]').forEach(d => {
+  const key = d.dataset.ui;
+  if (key in state.ui) d.open = state.ui[key];
+  d.addEventListener('toggle', () => { state.ui[key] = d.open; save(); });
+});
+
+// phones: collapse the sidebar to just its title so the graph gets the screen
+const sideBtn = document.getElementById('btn-side');
+function applySide() {
+  document.body.classList.toggle('side-min', !!state.ui.sideMin);
+  sideBtn.textContent = state.ui.sideMin ? 'show panel ▾' : 'hide panel ▴';
+  cy.resize();
+}
+sideBtn.onclick = () => { state.ui.sideMin = !state.ui.sideMin; save(); applySide(); };
+applySide();
+
+// ---------- share links ----------
+// #goals=CMPT433,CMPT431&taken=CMPT120&skip=ENSC351 (readable, and survives being pasted into chat apps)
+// plus sat=... for non-course requirements marked satisfied ("UNITS:60"), which aren't course codes
+const PLAN_KEYS = { goals: 'targets', taken: 'taken', skip: 'excluded' };
+function shareURL() {
+  const parts = Object.entries(PLAN_KEYS)
+    .map(([k, list]) => [k, state[list].filter(isCourseId).map(id => id.replace(' ', ''))])
+    .filter(([, ids]) => ids.length)
+    .map(([k, ids]) => `${k}=${ids.join(',')}`);
+  const sat = state.taken.filter(id => !isCourseId(id));
+  if (sat.length) parts.push('sat=' + sat.map(encodeURIComponent).join('|'));
+  return location.href.split('#')[0] + '#' + parts.join('&');
+}
+const shareDialog = document.getElementById('share-dialog');
+const shareInput = shareDialog.querySelector('input');
+const shareMsg = document.getElementById('share-msg');
+document.getElementById('btn-share').onclick = () => {
+  if (!state.targets.length) return showToast('Add a goal course first', false);
+  shareInput.value = shareURL();
+  shareMsg.textContent = '';
+  shareDialog.showModal();
+  shareInput.select();
+};
+document.getElementById('share-copy').onclick = async () => {
+  shareInput.select();
+  let ok = false;
+  try { await navigator.clipboard.writeText(shareInput.value); ok = true; } catch (e) {}
+  // the async clipboard API can be blocked (e.g. some file:// setups); the legacy copy of the selection usually still works
+  if (!ok) { try { ok = document.execCommand('copy'); } catch (e) {} }
+  shareMsg.textContent = ok ? '✓ Copied to clipboard'
+    : 'Couldn\'t copy automatically. The link is selected, so press Ctrl+C (⌘C on Mac).';
+};
+
+// opening a shared link replaces your lists (undoable), then clears the hash so a reload doesn't re-apply it
+function loadPlanFromHash() {
+  const params = new URLSearchParams(location.hash.slice(1));
+  if (![...params.keys()].some(k => k in PLAN_KEYS)) return;
+  checkpoint('Loaded the shared plan');
+  for (const [k, list] of Object.entries(PLAN_KEYS)) state[list] = parseCourses(params.get(k) || '');
+  // URLSearchParams already decoded once; each item was encoded again so '|' can separate them
+  const sat = (params.get('sat') || '').split('|').filter(Boolean).map(s => { try { return decodeURIComponent(s); } catch (e) { return s; } });
+  state.taken.push(...sat.filter(s => /^(UNITS|PERMISSION):/.test(s)));
+  history.replaceState(null, '', location.href.split('#')[0]);
+  save();
+}
+window.addEventListener('hashchange', () => { loadPlanFromHash(); render(); });
+
+document.getElementById('btn-refresh').onclick = async () => {
+  await idb.clear();
+  location.reload();
+};
+
+(async function boot() {
+  const status = document.getElementById('status');
+  try {
+    const bulk = await loadBulk();
+    PREREQS = {};
+    for (const k in bulk.prereqs) PREREQS[norm(k)] = bulk.prereqs[k];
+    COURSES = new Map(bulk.outlines.map(c => [norm(`${c.dept} ${c.number}`), c]));
+    DEPTS = new Set(bulk.outlines.map(c => String(c.dept).toUpperCase()));
+    LATEST = new Map();
+    for (const [id, c] of COURSES) {
+      const keys = (c.offerings || []).map(o => termKey(o.term));
+      if (keys.length) LATEST.set(id, Math.max(...keys));
+    }
+    const when = bulk.stamp ? new Date(bulk.stamp) : new Date(bulk.t);
+    document.getElementById('data-info').textContent =
+      `sfucourses data from ${when.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${bulk.fromCache ? ' (cached)' : ''}`;
+    status.textContent = '';
+    loadPlanFromHash();
+    render();
+  } catch (e) {
+    status.textContent = 'Failed to load course data: ' + e.message;
+  }
+})();
+</script>
+</body>
+</html>
