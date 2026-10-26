@@ -118,19 +118,6 @@
   #about li { margin-bottom: 4px; }
 
   /* dialog */
-  #share-dialog { background: var(--popover); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 16px 48px var(--shadow); padding: 24px; width: min(480px, calc(100vw - 32px)); }
-  #share-dialog::backdrop { background: rgba(0,0,0,.5); }
-  #share-dialog h3 { margin: 0 0 6px; font-size: 18px; font-weight: 600; letter-spacing: -.015em; line-height: 1.2; }
-  #share-dialog .hint { margin: 0 0 16px; font-size: 14px; }
-  #share-dialog .share-row { display: flex; gap: 8px; margin-bottom: 8px; }
-  #share-dialog input { flex: 1; min-width: 0; height: 36px; padding: 0 12px; border: 1px solid var(--input-border); border-radius: calc(var(--radius) - 2px); font: 12px Geist Mono, ui-monospace, monospace; background: var(--input); color: var(--text); }
-  #share-dialog input:focus { outline: none; border-color: var(--ring-strong); box-shadow: 0 0 0 3px var(--ring); }
-  #share-dialog button { height: 36px; border: 1px solid var(--border); background: var(--bg); border-radius: calc(var(--radius) - 2px); padding: 0 16px; font-weight: 500; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
-  #share-dialog button:hover { background: var(--accent); }
-  #share-dialog button.primary { background: var(--primary); border-color: var(--primary); color: var(--primary-fg); }
-  #share-dialog button.primary:hover { opacity: .9; }
-  #share-dialog #share-msg { min-height: 1.4em; margin: 0 0 12px; font-size: 13px; }
-  #share-dialog form { text-align: right; margin: 0; }
 
   /* canvas + overlays */
   #main { flex: 1; position: relative; min-width: 0; background: var(--bg); background-image: radial-gradient(var(--border) 1px, transparent 1px); background-size: 22px 22px; }
@@ -226,7 +213,7 @@
       <span class="sw" style="border-color:var(--special);background:var(--special-bg);border-style:dotted"></span><span>Not offered in 2+ years</span>
       <span style="text-align:center;font-weight:700">*</span><span>Prereqs updated from SFU's current outline (verify)</span>
     </div>
-    <p class="hint">Hover a course to highlight what it needs (and what it unlocks). Click for actions, double-click to toggle taken. Hover a chip to find it in the graph.<br>
+    <p class="hint">Hover a course to highlight what it needs (and what it unlocks). Click for actions, double-click to toggle taken. Hover a chip to find it in the graph. The address bar always holds your plan, so copy or bookmark it to share or save.<br>
       <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo · <kbd>F</kbd> fit · <kbd>/</kbd> add a goal · <kbd>Tab</kbd> to a chip, <kbd>D</kbd> for details</p>
   </details>
 
@@ -252,14 +239,7 @@
   <div id="cy"></div>
   <div id="empty">Add a course you want to take to see its prerequisite tree.</div>
   <div id="status">Loading course data…</div>
-  <div id="toolbar"><button id="btn-share" title="Get a link that opens this plan">🔗 Share plan</button><button id="btn-theme" title="Switch theme"></button></div>
-  <dialog id="share-dialog" aria-labelledby="share-title">
-    <h3 id="share-title">Share this plan</h3>
-    <p class="hint">Anyone who opens this link sees your goals, taken courses and “won't take” list. It replaces their own lists, and they can undo that.</p>
-    <div class="share-row"><input readonly aria-label="Share link"><button id="share-copy" class="primary">Copy link</button></div>
-    <p class="hint" id="share-msg" aria-live="polite"></p>
-    <form method="dialog"><button>Close</button></form>
-  </dialog>
+  <div id="toolbar"><button id="btn-share" title="The address bar always holds your plan; this copies it">🔗 Copy link</button><button id="btn-theme" title="Switch theme"></button></div>
   <div id="zoom">
     <button id="btn-zin" title="Zoom in">+</button>
     <button id="btn-zout" title="Zoom out">−</button>
@@ -278,7 +258,11 @@ const STORE_KEY = 'sfu-prereq-planner-v1';
 // ---------- state ----------
 const state = { targets: [], taken: [], excluded: [], hideTaken: false, hidePerm: true, hideStale: true };
 try { Object.assign(state, JSON.parse(localStorage.getItem(STORE_KEY) || '{}')); } catch (e) {}
-function save() { try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {} }
+let urlReady = false; // set once boot has read any plan from the link
+function save() {
+  try { localStorage.setItem(STORE_KEY, JSON.stringify(state)); } catch (e) {}
+  syncURL(); // the address bar always mirrors the plan
+}
 
 const SFU = 'https://www.sfu.ca/bin/wcm/course-outlines';
 
@@ -1065,15 +1049,13 @@ cy.on('tap', 'node', ev => {
   menu.style.top = Math.max(8, Math.min(p.y - menu.offsetHeight / 2, box.height - menu.offsetHeight - 8)) + 'px';
 });
 document.addEventListener('keydown', e => {
-  // while the share <dialog> is open, Esc belongs to it (it closes itself); don't also close what's behind it
-  if (e.key === 'Escape' && !modalOpen()) { hideMenu(); closeDetail(); }
+  if (e.key === 'Escape') { hideMenu(); closeDetail(); }
 });
 
 // ---------- detail panel ----------
 const detail = document.getElementById('detail');
 let detailId = null; // course shown in the panel, so it can refresh when SFU data arrives
 function closeDetail() { detail.style.display = 'none'; detailId = null; }
-const modalOpen = () => !!document.querySelector('dialog[open]');
 function openDetail(id) {
   detail.style.display = 'block';
   detailId = id;
@@ -1297,7 +1279,6 @@ document.getElementById('clear-taken').onclick = () => {
   state.taken = []; save(); render();
 };
 document.addEventListener('keydown', e => {
-  if (modalOpen()) return; // page shortcuts (undo, fit, /) shouldn't act behind the share dialog
   const el = document.activeElement;
   const inText = el.tagName === 'TEXTAREA' || (el.tagName === 'INPUT' && el.type !== 'checkbox');
   // Ctrl+Z is ours unless there's text to undo in the field (focus stays in the empty input after adding a course)
@@ -1329,57 +1310,88 @@ function applySide() {
 sideBtn.onclick = () => { state.ui.sideMin = !state.ui.sideMin; save(); applySide(); };
 applySide();
 
-// ---------- share links ----------
-// #goals=CMPT433,CMPT431&taken=CMPT120&skip=ENSC351 (readable, and survives being pasted into chat apps)
-// plus sat=... for non-course requirements marked satisfied ("UNITS:60"), which aren't course codes
-const PLAN_KEYS = { goals: 'targets', taken: 'taken', skip: 'excluded' };
-function shareURL() {
-  const parts = Object.entries(PLAN_KEYS)
-    .map(([k, list]) => [k, state[list].filter(isCourseId).map(id => id.replace(' ', ''))])
-    .filter(([, ids]) => ids.length)
-    .map(([k, ids]) => `${k}=${ids.join(',')}`);
-  const sat = state.taken.filter(id => !isCourseId(id));
-  if (sat.length) parts.push('sat=' + sat.map(encodeURIComponent).join('|'));
-  return location.href.split('#')[0] + '#' + parts.join('&');
+// ---------- the plan lives in the URL ----------
+// The address bar always holds the current plan, so copying or bookmarking it shares/saves the plan.
+// Compact form, department written once per group (~40% shorter than full codes, still readable):
+//   #g=cmpt413.431&t=cmpt120.125,macm101&x=ensc351&s=UNITS%3A60
+//   g = goals, t = taken, x = won't take, s = non-course requirements marked satisfied
+// Old links (#goals=CMPT433,CMPT431&taken=...&skip=...&sat=...) still open.
+const PLAN_KEYS = { g: 'targets', t: 'taken', x: 'excluded' };
+const OLD_PLAN_KEYS = { goals: 'targets', taken: 'taken', skip: 'excluded' };
+function encodeCourses(ids) {
+  const byDept = new Map();
+  ids.filter(isCourseId).sort().forEach(id => {
+    const [d, n] = id.split(' ');
+    if (!byDept.has(d)) byDept.set(d, []);
+    byDept.get(d).push(n);
+  });
+  return [...byDept].map(([d, ns]) => (d + ns.join('.')).toLowerCase()).join(',');
 }
-const shareDialog = document.getElementById('share-dialog');
-const shareInput = shareDialog.querySelector('input');
-const shareMsg = document.getElementById('share-msg');
-// clicks on the backdrop land on the <dialog> element itself, outside its box
-shareDialog.addEventListener('click', e => {
-  const r = shareDialog.getBoundingClientRect();
-  if (e.target === shareDialog && (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom)) shareDialog.close();
-});
-document.getElementById('btn-share').onclick = () => {
-  if (!state.targets.length) return showToast('Add a goal course first', false);
-  shareInput.value = shareURL();
-  shareMsg.textContent = '';
-  shareDialog.showModal();
-  shareInput.select();
-};
-document.getElementById('share-copy').onclick = async () => {
-  shareInput.select();
-  let ok = false;
-  try { await navigator.clipboard.writeText(shareInput.value); ok = true; } catch (e) {}
-  // the async clipboard API can be blocked (e.g. some file:// setups); the legacy copy of the selection usually still works
-  if (!ok) { try { ok = document.execCommand('copy'); } catch (e) {} }
-  shareMsg.textContent = ok ? '✓ Copied to clipboard'
-    : 'Couldn\'t copy automatically. The link is selected, so press Ctrl+C (⌘C on Mac).';
-};
-
-// opening a shared link replaces your lists (undoable), then clears the hash so a reload doesn't re-apply it
+function decodeCourses(s) {
+  const out = [];
+  for (const g of (s || '').split(',')) {
+    const m = /^([a-z]{2,5})(\d{3}[a-z]?(?:\.\d{3}[a-z]?)*)$/i.exec(g.trim());
+    if (m) m[2].split('.').forEach(n => out.push(`${m[1].toUpperCase()} ${n.toUpperCase()}`));
+  }
+  return [...new Set(out)];
+}
+function planHash() {
+  const parts = Object.entries(PLAN_KEYS)
+    .map(([k, list]) => [k, encodeCourses(state[list])])
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}=${v}`);
+  const sat = state.taken.filter(id => !isCourseId(id));
+  if (sat.length) parts.push('s=' + sat.map(encodeURIComponent).join('|'));
+  return parts.join('&');
+}
+function syncURL() {
+  if (!urlReady) return; // don't overwrite an incoming link before boot has read it
+  const h = planHash();
+  if (location.hash.slice(1) !== h) history.replaceState(null, '', location.href.split('#')[0] + (h ? '#' + h : ''));
+}
+function planFromHash() {
+  const p = new URLSearchParams(location.hash.slice(1));
+  const keys = [...p.keys()];
+  const compact = keys.some(k => k in PLAN_KEYS);
+  if (!compact && !keys.some(k => k in OLD_PLAN_KEYS)) return null;
+  const plan = {};
+  for (const [k, list] of Object.entries(compact ? PLAN_KEYS : OLD_PLAN_KEYS)) {
+    plan[list] = compact ? decodeCourses(p.get(k)) : parseCourses(p.get(k) || '');
+  }
+  const sat = (p.get(compact ? 's' : 'sat') || '').split('|').filter(Boolean)
+    .map(s => { try { return decodeURIComponent(s); } catch (e) { return s; } });
+  plan.taken.push(...sat.filter(s => /^(UNITS|PERMISSION):/.test(s)));
+  return plan;
+}
+// a link whose plan differs from the one saved in this browser replaces it (undoable)
 function loadPlanFromHash() {
-  const params = new URLSearchParams(location.hash.slice(1));
-  if (![...params.keys()].some(k => k in PLAN_KEYS)) return;
-  checkpoint('Loaded the shared plan');
-  for (const [k, list] of Object.entries(PLAN_KEYS)) state[list] = parseCourses(params.get(k) || '');
-  // URLSearchParams already decoded once; each item was encoded again so '|' can separate them
-  const sat = (params.get('sat') || '').split('|').filter(Boolean).map(s => { try { return decodeURIComponent(s); } catch (e) { return s; } });
-  state.taken.push(...sat.filter(s => /^(UNITS|PERMISSION):/.test(s)));
-  history.replaceState(null, '', location.href.split('#')[0]);
+  const plan = planFromHash();
+  if (!plan) return;
+  const key = l => JSON.stringify([...l].sort());
+  if (['targets', 'taken', 'excluded'].every(l => key(plan[l]) === key(state[l]))) return;
+  checkpoint('Opened the plan from this link');
+  Object.assign(state, plan);
   save();
 }
-window.addEventListener('hashchange', () => { loadPlanFromHash(); render(); });
+window.addEventListener('hashchange', () => { loadPlanFromHash(); syncURL(); render(); });
+
+document.getElementById('btn-share').onclick = async () => {
+  syncURL();
+  const url = location.href;
+  let ok = false;
+  try { await navigator.clipboard.writeText(url); ok = true; } catch (e) {}
+  if (!ok) {
+    // the async clipboard API can be blocked (e.g. some file:// setups); the legacy copy usually still works
+    const ta = document.createElement('textarea');
+    ta.value = url;
+    ta.style.cssText = 'position:fixed;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { ok = document.execCommand('copy'); } catch (e) {}
+    ta.remove();
+  }
+  showToast(ok ? 'Link to this plan copied' : 'Couldn\'t copy. The address bar has the link to this plan.', false);
+};
 
 document.getElementById('btn-refresh').onclick = async () => {
   await idb.clear();
@@ -1404,6 +1416,8 @@ document.getElementById('btn-refresh').onclick = async () => {
       `sfucourses data from ${when.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })}${bulk.fromCache ? ' (cached)' : ''}`;
     status.textContent = '';
     loadPlanFromHash();
+    urlReady = true;
+    syncURL();
     render();
   } catch (e) {
     status.textContent = 'Failed to load course data: ' + e.message;
