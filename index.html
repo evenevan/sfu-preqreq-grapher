@@ -223,7 +223,7 @@
       <summary>About the data</summary>
       <ul>
         <li>Course info comes from <a href="https://api.sfucourses.com" target="_blank" rel="noopener">sfucourses.com</a>. Each course's prerequisites are re-checked against SFU's official outline for its latest offering.</li>
-        <li><b>*</b> marks courses whose requirements were read from SFU's wording by this tool (because sfucourses was out of date or had none). Those are best-effort.</li>
+        <li><b>*</b> marks courses whose requirements need a second look: SFU's current wording differs from sfucourses, sfucourses had no parsed requirements, or this tool and sfucourses read the wording differently. The details panel says which.</li>
         <li>Only course requirements are drawn. Unit counts (“60 units”), minimum grades, high-school courses and program-specific conditions are left out, so “ready” only means you have the course prereqs.</li>
         <li>Corequisites aren't drawn either; they're listed in the hover and details for the few courses that have them.</li>
         <li>“Retired” means not offered in about 2 years. Offering history only goes back to Spring 2024.</li>
@@ -389,8 +389,17 @@ function parseCourses(text) {
 function label(id) {
   if (id.startsWith('UNITS:')) return `${id.slice(6)} units`;
   if (id.startsWith('PERMISSION:')) return 'Permission';
+  if (id.startsWith('COREQUISITE:')) return `${id.slice(12)} (coreq)`;
   return id;
 }
+// course boxes are 100px unless their label needs more ("MATH 150 (coreq)", "CMPT 379 *")
+const measure = document.createElement('canvas').getContext('2d');
+const widthCache = new Map();
+function courseWidth(text) {
+  if (!widthCache.has(text)) { measure.font = '600 13px Geist, ui-sans-serif, system-ui, sans-serif'; widthCache.set(text, Math.max(100, Math.ceil(measure.measureText(text).width) + 22)); }
+  return widthCache.get(text);
+}
+const shownLabel = n => n.inferred ? n.label + ' *' : n.label;
 
 // ---------- prereq text parser ----------
 // Used when SFU's current outline disagrees with sfucourses, or sfucourses has no parsed tree.
@@ -398,61 +407,237 @@ function label(id) {
 // that inherit the previous department ("CMPT 125, 126, 128").
 
 function parseRequirementText(text) {
+  // the first sentence that names a course (skips preambles like co-op instructions); later sentences are
+  // usually substitutions/notes mentioning unrelated courses
+  const C = '(?:[A-Z]{2,5}\\s?)?\\d{3}[A-Z]?';
+  text = text
+    .replace(/\b([A-Z][a-z]{1,4}) (\d{3}[A-Z]?)\b/g, (m, d, n) => DEPTS.has(d.toUpperCase()) ? `${d.toUpperCase()} ${n}` : m) // "Math 232"
+    .replace(/\((?:previously|formerly)\s+([^()]+)\)/gi, '(or $1)') // "MSE 251 (previously ENSC 226)"
+    .replace(/\s+or (?:better|higher|above)\b/gi, '')                // "grades of C- or better"
+    // written-out dept last, so a following bare number ("CA (or FPA) 360 and 366") inherits the right one
+    .replace(/\b([A-Z]{2,5}) \(or ([A-Z]{2,5})\) (\d{3}[A-Z]?)\b/g, '($2 $3 or $1 $3)') // "ECON (or BUEC) 333"
+    .replace(/\b([A-Z]{2,5})\/([A-Z]{2,5}) (\d{3}[A-Z]?)\b/g, '($2 $3 or $1 $3)')     // "HS/HIST 277"
+    .replace(new RegExp(`\\b${C}(?:\\s*/\\s*${C})+\\b(?![-\\s]*level)`, 'g'), m => `(${m.split(/\s*\/\s*/).join(' or ')})`) // "EDUC 401/402", not "300/400-level"
+    .replace(new RegExp(`\\b(${C})\\s*\\(\\s*or\\s+([^()]+?)\\)`, 'g'), '($1 or ($2))') // "MBB 201 (or 231)", "BUS 311 (or BUS 254 and BUS 312)"
+    .replace(/\(\s*or\b/gi, 'or (')                     // any other "(or ...)" aside
+    .replace(/\s+or (?:an )?equivalent\b/gi, '');       // "MATH 152 or equivalent, and MATH 232 or equivalent"
+  // the first sentence naming a course; a later one only when the first names none (skips preambles like co-op
+  // instructions), and never a note. A following sentence that's nothing but courses ("PHYS 141. MATH 150 or
+  // MATH 151.") is part of it.
+  const sentences = text.split(/\.\s+(?=[A-Z(])/); // "(" too: the rewrites above can open a sentence with one
+  const named = s => /\b[A-Z]{2,5}\s?\d{3}/.test(s);
+  const note = s => /^\s*students (?:(?:who have|with) (?:credit|taken|received)|may not|cannot)\b/i.test(s);
+  let at = sentences.findIndex((s, k) => named(s) && !note(s)
+    && (k === 0 || !/\b(may not|cannot|for (further )?credit|recommended|corequisite)\b/i.test(s)));
+  let src = at < 0 ? '' : sentences[at];
+  while (src && sentences[++at] && new RegExp(`^\\s*(?:${C}|and|or|[\\s,;()])+[.\\s]*$`).test(sentences[at])) src += '; ' + sentences[at];
+  // drop advice and notes: "(STAT 240 is also recommended)", "...; GEOG 313 and EASC 201 recommended",
+  // "CMPT 120 or 130, with CMPT 125 recommended", "Recommended: ...", "...; Students may not take ..."
+  // A clause runs from the "(", ";" or "," that opens it to its ")" or the next ";", and only it goes.
+  const dropClause = (s, k) => {
+    let p = s.lastIndexOf('(', k);
+    if (p >= 0 && s.slice(p, k).includes(')')) p = -1;
+    const open = Math.max(p, s.lastIndexOf(';', k), s.lastIndexOf(',', k));
+    const end = open >= 0 && open === p ? (s.indexOf(')', k) + 1 || s.length) : (s.indexOf(';', k) + 1 || s.length + 1) - 1;
+    return s.slice(0, Math.max(0, open)) + ' ' + s.slice(end);
+  };
+  for (let guard = 0, k; guard < 5 && (k = src.search(/\b(?:(?:is|are) (?:also |strongly )?)?recommended\b|\b(?:may be substituted|students with credit|cannot take|students may not)\b/i)) >= 0; guard++)
+    src = /^recommended\s*:/i.test(src.slice(k)) ? src.slice(0, k) : dropClause(src, k);
+
   const toks = [];
-  // bare numbers inherit the previous dept ("CMPT 125, 126"), except unit counts ("100 units")
-  const re = /\(|\)|\b(?:[Aa]nd|[Oo]r)\b|\b(?:[Oo]ne|[Aa]ny|[Ee]ither) of\b|,|;|\b([A-Z]{2,5})\s?(\d{3}[A-Z]?)\b|\b(\d{3}[A-Z]?)\b(?!\s*(?:units|credits)\b)/g;
+  // bare numbers inherit the previous dept ("CMPT 125, 126"), except unit counts ("100 units") and "300-level"
+  // ("two of the following" is shown as "1 of": the graph has no "n of" box, and that's the closer reading)
+  // (also "300/400-level", "300- or 400-level", "300 level")
+  const re = /\(|\)|\b(?:[Aa]nd|[Oo]r|AND|OR)\b|\b(?:[Oo]ne|[Aa]ny|[Ee]ither|[Tt]wo|[Tt]hree|[Bb]oth|[Aa]ll) of\b|\b(?:[Ee]ither|[Bb]oth)\b|,|;|\b([A-Z]{2,5})\s?(\d{3}[A-Z]?)\b(?!\/|-\s*(?:or\b|level|division)|\s+(?:level|division))|\b(\d{3}[A-Z]?)\b(?!\s*(?:[Uu]nits|[Cc]redits|UNITS|CREDITS)\b|\/|-\s*(?:or\b|level|division)|\s+(?:level|division))/g;
   let m, dept = null;
-  // only the first sentence; later ones are usually substitutions/notes mentioning unrelated courses
-  let src = text.split(/\.\s+(?=[A-Z])/)[0];
-  const cut = src.search(/\b(may be substituted|recommended|students with credit|cannot take|equivalent)\b/i);
-  if (cut >= 0) src = src.slice(0, cut);
   while ((m = re.exec(src))) {
-    if (m[1]) { dept = m[1].toUpperCase(); toks.push({ t: 'c', id: `${dept} ${m[2].toUpperCase()}` }); }
-    else if (m[3]) { if (dept && /^\d/.test(m[3]) && toks.length && toks[toks.length - 1].t !== ')') toks.push({ t: 'c', id: `${dept} ${m[3].toUpperCase()}` }); }
-    else toks.push({ t: m[0].toLowerCase().replace(/\s+/g, ' ') });
+    // any department code counts, not just ones in today's catalogue: "ECON (or BUEC) 333", "CRIM 101 or FNST 101"
+    if (m[1]) { dept = m[1]; toks.push({ t: 'c', id: `${dept} ${m[2].toUpperCase()}` }); }
+    else if (m[3]) { if (dept && toks.length && toks[toks.length - 1].t !== ')') toks.push({ t: 'c', id: `${dept} ${m[3].toUpperCase()}`, bare: true }); }
+    else toks.push({ t: m[0].toLowerCase().replace(/\s+/g, ' ').replace(/^(two|three) of$/, 'one of') });
   }
+
+  // Precedence, loosest first: ";" then "," then and/or. Inside a comma-separated piece "or" binds tighter
+  // ("MATH 232 or 240 and one of ..."); across pieces "and" does ("BPK 201 or 207, and BPK 306, or ... BPK 201 and 208").
+  // "one of"/"either" take the run of courses after them, up to the next "and".
   let i = 0;
   const peek = () => toks[i] && toks[i].t;
+  const node = (type, kids) => kids.length === 1 ? kids[0] : { type, children: kids };
+  // ops[j] joins parts[j] and parts[j + 1]; `tight` binds before the other op
+  const join = (parts, ops, tight) => {
+    const groups = [[parts[0]]];
+    ops.forEach((op, j) => op === tight ? groups[groups.length - 1].push(parts[j + 1]) : groups.push([parts[j + 1]]));
+    return node(tight === 'and' ? 'or' : 'and', groups.map(g => node(tight, g)));
+  };
+  function item() {
+    const k = peek();
+    if (k === 'c') return { type: 'course', id: toks[i++].id };
+    if (k === '(') { i++; const s = list(); if (peek() === ')') i++; return s; }
+    // "one of"/"either" take a run of options joined by "," / "or" (and "and" before a bare number: "two of BPK 201,
+    // 205 and 207"); "both"/"all of" a run joined by "," / "and". Options can be courses, groups or nested runs.
+    // A separator not followed by an option ends the run and is left for the caller.
+    const any = /^(one|any|either) of$|^either$/.test(k), all = /^(both|all) of$|^both$/.test(k);
+    if (any || all) {
+      i++;
+      const opts = [], word = any ? 'or' : 'and';
+      const opt = t => t && (t.t === 'c' || t.t === '(' || /^(one|any|either|both|all) of$|^(either|both)$/.test(t.t));
+      const sep = () => (peek() === ',' || peek() === word || (any && peek() === 'and' && toks[i + 1] && toks[i + 1].bare))
+        && (opt(toks[i + 1]) || (toks[i + 1] && toks[i + 1].t === word && opt(toks[i + 2])));
+      // once the run's own "or"/"and" has appeared, a "," ends it: "One of CMPT 120, 125 or 130, MATH 151 and ..."
+      let said = false;
+      while (opt(toks[i]) || (!(said && peek() === ',') && sep())) {
+        if (!opt(toks[i])) { if (peek() === word) said = true; i++; continue; }
+        const s = item(); if (s) opts.push(s);
+      }
+      return opts.length ? node(word, opts) : null;
+    }
+    return undefined;
+  }
+  // combine pieces split by one separator; a piece's lead is the and/or right after the separator
+  function level(pieces, comma) {
+    const parts = [];
+    let carry = null; // a lead on a piece with no courses ("..., or for engineering students, X") carries on
+    for (const p of pieces) {
+      if (!p.node) { carry = p.lead || carry; continue; }
+      parts.push({ ...p, lead: p.lead || carry }); carry = p.trail || null; // "..., 146 or permission"
+    }
+    if (!parts.length) return { node: null, lead: carry };
+    // "MATH 150, 151 or 154, ..." and "MATH 150, 151, 154, or 157 and MATH 240 or 232": a piece that continues a
+    // run of same-department courses with "or" (its opening "or" choice, or a leading "or") finishes that run,
+    // so the run is one choice; whatever follows its first "and" stays a separate requirement
+    for (let j = parts.length - 1; comma && j > 0; j--) {
+      const p = parts[j];
+      if (!p.items) continue;
+      const k = p.ops.indexOf('and'), head = k < 0 ? p.items : p.items.slice(0, k + 1);
+      const bare = p.bareStart && !p.lead && head.length > 1;
+      if (!bare && (p.lead !== 'or' || k < 0)) continue; // a plain "A, B, or C" is handled below
+      let s = j;
+      while (s > 0 && (s === j || !parts[s].lead) && parts[s - 1].single && parts[s - 1].dept === p.dept && (bare || !parts[s - 1].lead)) s--;
+      // a leading "or" only finishes a real list ("A, B, or C and ..."), not "PSYC 820, or PSYC 820A and 820B"
+      if (s === j || (!bare && j - s < 2)) continue;
+      const choice = node('or', [...parts.slice(s, j).map(r => r.node), ...head].flatMap(n => n.type === 'or' ? n.children : [n]));
+      const rest = k < 0 ? [] : p.items.slice(k + 1);
+      parts.splice(s, j - s + 1, { ...parts[s], single: false, items: null, pure: rest.length ? null : 'or',
+        node: rest.length ? join([choice, ...rest], p.ops.slice(k), 'or') : choice });
+      j = s;
+    }
+    const leads = parts.slice(1).map(p => p.lead), last = parts[parts.length - 1];
+    let def = 'and';
+    // "A, B, or 45 units" / "A, B, or permission"; not when an "and" shows it's a list of requirements
+    // ("CHEM 230, 236W and 260, ..., or permission of the Department")
+    const plain = p => p.single && p.node.type === 'course';
+    if (comma && carry === 'or' && leads.every(l => !l) && parts.every(p => p.single || p.pure === 'or')) def = carry;
+    // "A, B, or C" lists of plain courses, not groups ("(MATH 150, ...), plus (CHEM 120 or 121) OR (PHYS ...)"),
+    // nor a run merged above ("PHYS 140, MATH 150, 151 or 154" is PHYS 140 and one of the MATHs)
+    else if (parts.slice(0, -1).every(plain) && last.items && last.items.every(n => n.type === 'course')) {
+      const said = leads.filter(Boolean);
+      if (said.length && said.every(l => l === said[0])) def = said[0]; // "A, B, or C", "A, B, or C, ..., or D"
+      // "A, B or C" without the comma before "or": a choice only within one department ("CA 140, 144, 146 or ...");
+      // across departments it's usually a list ending in a choice ("Math 232, MATH 251, MSE 320 or ENSC 382"). When
+      // it's ambiguous, the stricter reading is the safer mistake.
+      else if (leads.every(l => !l) && last.pure && (last.pure === 'and'
+        || new Set([...parts.slice(0, -1).map(p => p.node), ...(last.items || [])].map(n => n.id.split(' ')[0])).size === 1)) def = last.pure;
+    }
+    // across commas "and" binds tighter (BPK 448 above); across semicolons "or" does
+    // ("MATH 152; or MATH 155 or 158; MATH 232 or 240" is (152 or 155 or 158) and (232 or 240))
+    return { node: join(parts.map(p => p.node), leads.map(l => l || def), comma ? 'and' : 'or'), lead: parts[0].lead, trail: carry };
+  }
   function list() {
-    // items separated by , ; and/or. A list's join op is the first explicit and/or seen; default 'and'.
-    const items = [], ops = [];
-    let oneOf = false;
+    const fresh = () => ({ lead: null, items: [], ops: [], bares: [] });
+    const semis = [[fresh()]];
+    let pend = null;
+    const cur = () => semis[semis.length - 1][semis[semis.length - 1].length - 1];
     while (i < toks.length && peek() !== ')') {
       const k = peek();
-      if (k === 'one of' || k === 'any of' || k === 'either of') { oneOf = true; i++; continue; }
-      if (k === 'and' || k === 'or') { ops.push(k); i++; continue; }
-      if (k === ',' || k === ';') { ops.push(','); i++; continue; }
-      if (k === '(') { i++; const s = list(); if (peek() === ')') i++; if (s) items.push(s); continue; }
-      if (k === 'c') { items.push({ type: 'course', id: toks[i].id }); i++; continue; }
-      i++;
+      if (k === ';') { i++; cur().trail = pend; semis.push([fresh()]); pend = null; continue; }
+      if (k === ',') { i++; cur().trail = pend; semis[semis.length - 1].push(fresh()); pend = null; continue; }
+      if (k === 'and' || k === 'or') { i++; const c = cur(); if (c.items.length) pend = k; else c.lead = c.lead || k; continue; }
+      const tk = toks[i];
+      const it = item();
+      if (it === undefined) { i++; continue; }
+      if (!it) continue;
+      const c = cur();
+      if (c.items.length) c.ops.push(pend || 'and');
+      else { c.bareStart = k === 'c' && !!tk.bare; c.dept = it.type === 'course' ? it.id.split(' ')[0] : null; }
+      c.items.push(it); c.bares.push(k === 'c' && !!tk.bare); pend = null;
     }
-    if (!items.length) return null;
-    if (items.length === 1) return items[0];
-    // mixed and/or at one level: split on 'or' when explicit ors are separated by explicit ands is rare; use precedence and > or
-    const hasOr = ops.includes('or'), hasAnd = ops.includes('and');
-    if (oneOf || (hasOr && !hasAnd)) return { type: 'or', children: items };
-    if (hasAnd && !hasOr) return { type: 'and', children: items };
-    // both present: group by 'or' with 'and'/',' binding tighter
-    const groups = [[items[0]]];
-    let k = 0;
-    for (const op of ops) {
-      if (k + 1 >= items.length) break;
-      if (op === 'or') groups.push([]);
-      groups[groups.length - 1].push(items[++k]);
-    }
-    const g = groups.filter(x => x.length).map(x => x.length === 1 ? x[0] : { type: 'and', children: x });
-    return g.length === 1 ? g[0] : { type: 'or', children: g };
+    cur().trail = pend;
+    // with both "and" and "or" in a piece, a bare number binds to the course before it first:
+    // "CHEM 111 or CHEM 110 and 115" is 111 or (110 and 115); "MATH 232 or 240 and one of ..." is (232 or 240) and ...
+    const tight = new Set();
+    const tighten = c => {
+      if (!(c.ops.includes('and') && c.ops.includes('or'))) return c;
+      const items = [c.items[0]], ops = [];
+      c.ops.forEach((op, j) => {
+        if (!c.bares[j + 1]) { items.push(c.items[j + 1]); ops.push(op); return; }
+        const prev = items.pop();
+        const g = tight.has(prev) && prev.type === op ? { ...prev, children: [...prev.children, c.items[j + 1]] } : { type: op, children: [prev, c.items[j + 1]] };
+        tight.add(g); items.push(g);
+      });
+      return { ...c, items, ops };
+    };
+    const piece = raw => { const c = tighten(raw); return {
+      lead: c.lead, trail: c.trail, single: c.items.length === 1, bareStart: c.bareStart, items: c.items, ops: c.ops,
+      dept: c.items.length === 1 && c.items[0].type === 'course' ? c.items[0].id.split(' ')[0] : c.dept,
+      pure: c.ops.length && c.ops.every(o => o === c.ops[0]) ? c.ops[0] : null,
+      node: c.items.length ? join(c.items, c.ops, 'or') : null,
+    }; };
+    return level(semis.map(s => level(s.map(piece), true)), false).node;
   }
   return list();
+}
+
+// "MATH 154 or MATH 157 with a grade of at least B+ may be substituted for MATH 151 (MATH 150)." sfucourses reads
+// that sentence as extra requirements (CMPT 371 came out as "... and 1 of MATH 154/157 and MATH 151 and MATH 150").
+// Undo that, then offer the substitutes as one more option wherever the replaced course is asked for.
+// Grade conditions are left out here, as with every other minimum grade; the full text is in the details panel.
+function applySubstitutions(tree, text) {
+  if (!tree || !text) return tree;
+  const subs = [];
+  for (const s of text.split(/\.\s+(?=[A-Z])/)) {
+    let m = s.match(/^(.*?)\bmay (?:be substituted|substitute (?:these courses|them|it)) for\b(.*)$/i);
+    const use = !m && s.match(/^.*?\bmay use\b(.*?)\binstead of\b(.*)$/i); // "... may use STAT 270 instead of ENSC 280"
+    if (use) m = use;
+    if (!m) continue;
+    // just this clause, when it sits inside a longer one: "MATH 151 (MATH 154 may be substituted for MATH 151) and ..."
+    const byText = m[1].slice(Math.max(m[1].lastIndexOf('('), m[1].lastIndexOf(';')) + 1), frText = m[2].split(/[);]/)[0];
+    const by = parseRequirementText(byText.replace(/\bwith (?:a grade of )?at least .*$/i, '').replace(/^.*\bcompleted (?:both )?/i, ''));
+    const fr = new Set(parseCourses(frText));
+    if (by && fr.size) subs.push({ by, byCodes: codesOf(by), fr });
+  }
+  if (!subs.length) return tree;
+  const within = (n, set) => { const c = codesOf(n); return c.size > 0 && [...c].every(x => set.has(x)); };
+  const key = n => JSON.stringify(n);
+  // 1. drop the bogus top-level pieces: the substitutes as a requirement, repeats, and bare copies of an option
+  if (tree.type === 'and') {
+    let kids = tree.children.filter(c => !subs.some(s => within(c, s.byCodes)));
+    kids = kids.filter((c, i) => kids.findIndex(d => key(d) === key(c)) === i);
+    // only copies of a course the sentence replaces, so a real "MATH 151 and (...)" requirement stays
+    kids = kids.filter(c => c.type !== 'course' || !subs.some(s => s.fr.has(c.id))
+      || !kids.some(d => d !== c && d.type !== 'course' && codesOf(d).has(c.id)));
+    tree = kids.length === 1 ? kids[0] : { ...tree, children: kids };
+  }
+  // 2. add each substitute next to what it replaces
+  const add = n => {
+    if (!n) return n;
+    const s = subs.find(s => n.type === 'course' ? s.fr.has(n.id)
+      : n.type === 'or' && n.children.some(c => c.type === 'course' && s.fr.has(c.id)));
+    if (s && n.type === 'course') return { type: 'or', children: [n, s.by] };
+    if (s) return { ...n, children: [...n.children, s.by] };
+    return n.children ? { ...n, children: n.children.map(add) } : n;
+  };
+  return add(tree);
 }
 
 // ---------- resolving prereqs against SFU's official outlines ----------
 // sfucourses sometimes serves an old term's prerequisite text (e.g. CMPT 433 lacked ENSC 351), so for every
 // course in the graph we read the outline for its most recent offering straight from SFU.
-//   source 'api':  SFU agrees with sfucourses (same courses mentioned) -> use sfucourses' parsed tree
-//   source 'sfu':  SFU's current text differs -> parse SFU's text ourselves (flagged *)
-//   source 'text': SFU unavailable and sfucourses has no tree -> parse sfucourses' text (flagged *)
-const RESOLVED = {}; // id -> { tree, source, text, term, oldText }
+// The text is also read by our own parser, as a second opinion on sfucourses' parsed tree:
+//   source 'api':      both readings agree -> sfucourses' tree (it also carries units/permission requirements)
+//   source 'disputed': same text, readings differ -> ours, which was right far more often when checked (flagged *)
+//   source 'sfu':      SFU's current text differs from sfucourses' -> ours, from SFU's text (flagged *)
+//   source 'text':     SFU unavailable and sfucourses has no tree -> ours, from sfucourses' text (flagged *)
+const RESOLVED = {}; // id -> { tree, source, text, term, oldText, alt }
 const resolving = new Set();
 
 function codesOf(tree, out = new Set()) {
@@ -461,7 +646,26 @@ function codesOf(tree, out = new Set()) {
   else (tree.children || []).forEach(c => codesOf(c, out));
   return out;
 }
-const sameSet = (a, b) => a.size === b.size && [...a].every(x => b.has(x));
+function withoutCourse(n, id) {
+  if (!n || n.type === 'course') return n && n.id === id ? null : n;
+  const kids = (n.children || []).map(c => withoutCourse(c, id)).filter(Boolean);
+  return kids.length > 1 ? { ...n, children: kids } : kids[0] || null;
+}
+// course structure only, for comparing two readings: ignores units/permission/corequisite leaves (our parser skips
+// "Corequisite: ..." sentences), order, duplicates and nesting of same-type groups
+function shape(tree) {
+  const c = n => {
+    if (!n) return null;
+    if (n.type === 'course') return isCourseId(n.id) ? n.id : null;
+    const kids = (n.children || []).map(c).filter(Boolean).flatMap(k => k.t === n.type ? k.c : [k]);
+    const uniq = [...new Set(kids.map(k => JSON.stringify(k)))].sort().map(k => JSON.parse(k));
+    return uniq.length > 1 ? { t: n.type, c: uniq } : uniq[0] || null;
+  };
+  return JSON.stringify(c(tree));
+}
+// "CMPT 225 and (MATH 151 or MATH 150)"
+const describeTree = n => !n ? 'nothing' : n.type === 'course' ? label(n.id)
+  : (n.children || []).map(k => k.type === 'course' || k.type === n.type ? describeTree(k) : `(${describeTree(k)})`).join(` ${n.type} `);
 const squash = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
 
 async function sfuOutline(id) {
@@ -485,17 +689,22 @@ function resolvePrereqs(id) {
   const api = PREREQS[id] || null;
   const oldText = COURSES.get(id).prerequisites || '';
   sfuOutline(id).catch(() => null).then(sfu => {
+    if (sfu && !sfu.text.trim()) sfu = null; // an outline without the field says nothing about prerequisites
     const text = sfu ? sfu.text : oldText;
-    const parsed = /[A-Z]{2,5}\s?\d{3}/.test(text) ? parseRequirementText(text) : null;
+    const mine = tidyTree(parseRequirementText(text), text, id); // null when the text names no course
+    const theirs = tidyTree(api, text, id), changed = !!sfu && squash(text) !== squash(oldText);
     let r;
-    if (api && (squash(text) === squash(oldText) || sameSet(codesOf(api), codesOf(parsed)))) r = { tree: api, source: 'api' };
-    else if (parsed) r = { tree: parsed, source: sfu ? 'sfu' : 'text' };
-    else if (sfu && codesOf(api).size) r = { tree: null, source: 'sfu' }; // SFU no longer lists course prereqs
-    else r = { tree: api, source: 'api' };
+    // same courses either way; still flagged when SFU's wording changed, since sfucourses' units/permission
+    // parts may be stale
+    if (theirs && mine && shape(theirs) === shape(mine)) r = { tree: theirs, source: changed ? 'sfu' : 'api' };
+    else if (theirs && mine && !changed) r = { tree: mine, source: 'disputed', alt: theirs };
+    else if (mine) r = { tree: mine, source: changed ? 'sfu' : 'text' };
+    else if (changed && codesOf(api).size) r = { tree: null, source: 'sfu' }; // SFU no longer lists course prereqs
+    else r = { tree: theirs, source: 'api' };
     RESOLVED[id] = { ...r, text, term: sfu && sfu.term, oldText };
   }).catch(() => {
     // never leave a course unresolved: prereqsOf would retry on every render, looping forever
-    RESOLVED[id] = { tree: api, source: 'api', text: oldText, oldText };
+    RESOLVED[id] = { tree: tidyTree(api, oldText, id), source: 'api', text: oldText, oldText };
   }).finally(() => {
     resolving.delete(id);
     updateSyncStatus();
@@ -507,8 +716,13 @@ function resolvePrereqs(id) {
 function prereqsOf(id) {
   if (id in RESOLVED) return RESOLVED[id].tree;
   resolvePrereqs(id);
-  return PREREQS[id] || null; // provisional until SFU answers
+  // provisional until SFU answers (and for courses outside the catalogue, which never resolve)
+  if (!PROVISIONAL.has(id)) PROVISIONAL.set(id, tidyTree(PREREQS[id], COURSES.get(id)?.prerequisites, id));
+  return PROVISIONAL.get(id);
 }
+const PROVISIONAL = new Map();
+// every reading gets the same clean-up: substitutions, and no self-reference ("may only register for ENSC 870-0")
+const tidyTree = (tree, text, id) => tree ? withoutCourse(applySubstitutions(tree, text || ''), id) : null;
 
 function updateSyncStatus() {
   const el = document.getElementById('status');
@@ -558,7 +772,9 @@ function satisfied(n) {
 function simplify(n, inOr) {
   if (!n) return null;
   if (n.type === 'course') {
-    const id = n.id.includes(':') ? n.id : norm(n.id);
+    let id = n.id.includes(':') ? n.id : norm(n.id);
+    // a corequisite whose course is already taken is that taken course
+    if (id.startsWith('COREQUISITE:') && has(state.taken, id.slice(12))) id = id.slice(12);
     if (inOr && hideReason(id)) return EXCL;
     return { type: 'course', id };
   }
@@ -691,14 +907,17 @@ function layout(nodes, edges) {
   }
   nodes.forEach((_, id) => lv(id));
 
-  // layer index: courses every 4th row; a junction sits midway below its course (-2), and a junction
-  // nested in another junction one row below that (-1), so it never lands on a course row
+  // layer index: courses every `stride` rows; a junction sits 2 rows below its course and a junction nested in
+  // another one row below that. `stride` is 4 unless "1 of"/"all of" boxes nest deeper than two, in which case
+  // course rows move apart so the deepest box still sits above the prerequisites it joins, never on a course row
+  const depth = id => { const p = succs.get(id)[0]; return nodes.get(p).kind === 'junction' ? 1 + depth(p) : 1; };
+  const stride = Math.max(4, 2 + Math.max(0, ...[...nodes.values()].filter(n => n.kind === 'junction').map(n => depth(n.id))));
   const layer = new Map();
   function ly(id) {
     if (layer.has(id)) return layer.get(id);
     const n = nodes.get(id);
     let v;
-    if (n.kind !== 'junction') v = level.get(id) * 4;
+    if (n.kind !== 'junction') v = level.get(id) * stride;
     else {
       const parent = succs.get(id)[0];
       v = ly(parent) - (nodes.get(parent).kind === 'junction' ? 1 : 2);
@@ -759,6 +978,21 @@ function layout(nodes, edges) {
       r.forEach((id, i) => x.set(id, (i - (r.length - 1) / 2) * GAP));
     }
   }
+  // groups with no edges between them don't pull on each other: keep each group's nodes together in every row
+  // (left to right by where the group settled), so the spacing step below can't stretch one group around another
+  const comp = new Map();
+  const find = id => { while (comp.get(id) !== id) { comp.set(id, comp.get(comp.get(id))); id = comp.get(id); } return id; };
+  nodes.forEach((_, id) => comp.set(id, id));
+  segs.forEach(s => comp.set(find(s.source), find(s.target)));
+  const groups = new Map();
+  nodes.forEach((_, id) => { const c = find(id); if (!groups.has(c)) groups.set(c, []); groups.get(c).push(id); });
+  const mean = ids => ids.reduce((s, id) => s + x.get(id), 0) / ids.length;
+  const ranked = [...groups.values()].sort((a, b) => mean(a) - mean(b));
+  const rank = new Map(); ranked.forEach((g, i) => g.forEach(id => rank.set(id, i)));
+  if (groups.size > 1) {
+    rows.forEach(r => r.sort((a, b) => rank.get(a) - rank.get(b) || x.get(a) - x.get(b)));
+    setIdx();
+  }
   // pull nodes toward their neighbours while keeping order and spacing: the closest positions to
   // `want` (least squares) with each node at least its gap right of the previous one. Subtracting the
   // cumulative gaps turns that into "non-decreasing", solved exactly by pooling adjacent violators,
@@ -781,19 +1015,8 @@ function layout(nodes, edges) {
       for (const b of blocks) for (let j = 0; j < b.n; j++, i++) x.set(r[i], b.sum / b.n + off[i]);
     }
   }
-  // groups with no edges between them don't pull on each other, so pack them side by side (left to right
-  // by where they settled) instead of leaving them wherever the row order happened to put them
-  const comp = new Map();
-  const find = id => { while (comp.get(id) !== id) { comp.set(id, comp.get(comp.get(id))); id = comp.get(id); } return id; };
-  nodes.forEach((_, id) => comp.set(id, id));
-  segs.forEach(s => comp.set(find(s.source), find(s.target)));
-  const groups = new Map();
-  nodes.forEach((_, id) => { const c = find(id); if (!groups.has(c)) groups.set(c, []); groups.get(c).push(id); });
+  // then pack the groups side by side, closing whatever gaps the spacing step left between them
   if (groups.size > 1) {
-    const mean = ids => ids.reduce((s, id) => s + x.get(id), 0) / ids.length;
-    const ranked = [...groups.values()].sort((a, b) => mean(a) - mean(b));
-    const rank = new Map(); ranked.forEach((g, i) => g.forEach(id => rank.set(id, i)));
-    rows.forEach(r => r.sort((a, b) => rank.get(a) - rank.get(b) || x.get(a) - x.get(b)));
     const lastIn = new Map(); // row -> rightmost node placed so far
     let right = -Infinity, rightId = null;
     for (const g of ranked) {
@@ -815,16 +1038,15 @@ function layout(nodes, edges) {
     }
   }
   function gapFor(a, b) {
-    const w = id => { const n = nodes.get(id); return n.kind === 'junction' ? junctionWidth(n) : n.kind === 'dummy' ? 4 : 100; };
+    const w = id => { const n = nodes.get(id); return n.kind === 'junction' ? junctionWidth(n) : n.kind === 'dummy' ? 4 : courseWidth(shownLabel(n)); };
     return (w(a) + w(b)) / 2 + 16;
   }
 
   const pos = new Map();
   nodes.forEach((_, id) => pos.set(id, { x: x.get(id), y: -layer.get(id) * ROW }));
-  return { pos, level, segs };
+  return { pos, level, segs, stride };
 }
-const ROW = 31; // px per layer; courses are 4 layers (124px) apart
-const levelY = l => -l * 4 * ROW;
+const ROW = 31; // px per layer; courses are usually 4 layers (124px) apart
 
 // ---------- rendering ----------
 function graphStyle() {
@@ -838,6 +1060,7 @@ function graphStyle() {
       'background-color': v('node-bg'), 'border-width': 2, 'border-color': v('need'),
       'transition-property': 'opacity', 'transition-duration': '120ms'
     }},
+    { selector: 'node[cw]', style: { 'width': 'data(cw)' } },
     { selector: 'node.ready', style: { 'border-color': v('ready'), 'background-color': v('ready-bg'), 'color': v('ready-text') } },
     { selector: 'node.taken', style: { 'border-color': v('taken'), 'background-color': v('taken-bg'), 'color': v('taken-text') } },
     { selector: 'node.target', style: { 'border-color': v('target'), 'border-width': 3, 'background-color': v('target-bg'), 'color': v('target-text') } },
@@ -868,8 +1091,10 @@ function graphStyle() {
     { selector: '.dim', style: { 'opacity': 0.15 } },
   ];
 }
-// node labels are canvas text, so restyle once Geist has loaded (otherwise they keep the fallback font)
-if (document.fonts) document.fonts.ready.then(() => cy.style(graphStyle()));
+// node labels are canvas text: once Geist has loaded, restyle (they'd keep the fallback font) and re-measure box
+// widths. The stylesheet itself loads late, so `fonts.ready` can resolve before Geist is even requested.
+const fontsIn = () => { widthCache.clear(); cy.style(graphStyle()); scheduleRender(); };
+if (document.fonts) { document.fonts.ready.then(fontsIn); document.fonts.addEventListener('loadingdone', fontsIn); }
 
 // ---------- theme ----------
 const THEMES = ['auto', 'light', 'dark'];
@@ -912,7 +1137,7 @@ function render(background) {
   const { nodes, edges, reqs } = buildGraph();
   lastReqs = reqs;
   document.getElementById('empty').style.display = state.targets.length ? 'none' : 'flex';
-  const { pos, level, segs } = layout(nodes, edges);
+  const { pos, level, segs, stride } = layout(nodes, edges);
 
   const els = [];
   nodes.forEach(n => {
@@ -932,8 +1157,9 @@ function render(background) {
     if (n.inferred) cls.push('inferred');
     if (n.hidden) cls.push('has-hidden');
     if (n.optional) cls.push('optional');
-    const data = { id: n.id, label: n.inferred ? n.label + ' *' : n.label, hidden: n.hidden || [] };
+    const data = { id: n.id, label: shownLabel(n), hidden: n.hidden || [] };
     if (n.kind === 'junction') data.w = junctionWidth(n);
+    else data.cw = courseWidth(data.label);
     els.push({ group: 'nodes', data, classes: cls.join(' '), position: pos.get(n.id) });
   });
   segs.forEach((s, i) => els.push({
@@ -943,10 +1169,11 @@ function render(background) {
 
   // lane labels on the left
   if (nodes.size) {
-    const xs = [...pos.values()].map(p => p.x);
-    const minX = Math.min(...xs) - 90;
+    // left of the leftmost box's edge (boxes can be wider than 100px)
+    const minX = Math.min(...[...nodes.values()].filter(n => n.kind !== 'dummy')
+      .map(n => pos.get(n.id).x - (n.kind === 'junction' ? junctionWidth(n) : courseWidth(shownLabel(n))) / 2)) - 40;
     const lvls = new Set([...nodes.values()].filter(n => n.kind === 'course' || n.kind === 'special').map(n => level.get(n.id)));
-    lvls.forEach(l => els.push({ group: 'nodes', data: { id: `__lane${l}`, label: l === 0 ? 'Completed' : `Step ${l}` }, classes: 'lane', position: { x: minX, y: levelY(l) }, selectable: false, grabbable: false }));
+    lvls.forEach(l => els.push({ group: 'nodes', data: { id: `__lane${l}`, label: l === 0 ? 'Completed' : `Step ${l}` }, classes: 'lane', position: { x: minX, y: -l * stride * ROW }, selectable: false, grabbable: false }));
   }
 
   const before = cy.nodes().map(n => n.id()).sort().join('|');
@@ -1016,8 +1243,9 @@ function prereqInfo(id) {
   const text = r ? r.text : (c?.prerequisites || '');
   const src = r ? (r.term ? `SFU outline, ${r.term}` : 'sfucourses.com') : 'sfucourses.com, still checking SFU';
   let note = '';
-  if (r?.source === 'sfu') note = `* SFU's current outline differs from sfucourses.com, which shows: “${r.oldText || 'none'}”. Edges were read from SFU's text, so double-check them.`;
+  if (r?.source === 'sfu') note = `* SFU's current outline differs from sfucourses.com, which shows: “${r.oldText || 'none'}”. The graph follows SFU's text, but double-check it.`;
   else if (r?.source === 'text') note = '* No parsed requirement tree was available, so edges were read from the text above. Double-check them.';
+  else if (r?.source === 'disputed') note = `* This text can be read more than one way. The graph shows this app's reading; sfucourses.com reads it as “${describeTree(r.alt)}”. Double-check against the text above.`;
   return { text, src, note };
 }
 
@@ -1402,7 +1630,7 @@ function planFromHash() {
   }
   const sat = (p.get(compact ? 's' : 'sat') || '').split('|').filter(Boolean)
     .map(s => { try { return decodeURIComponent(s); } catch (e) { return s; } });
-  plan.taken.push(...sat.filter(s => /^(UNITS|PERMISSION):/.test(s)));
+  plan.taken.push(...sat.filter(s => /^(UNITS|PERMISSION|COREQUISITE):/.test(s)));
   return plan;
 }
 // a link whose plan differs from the one saved in this browser replaces it (undoable)
