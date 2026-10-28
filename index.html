@@ -211,7 +211,7 @@
       <span class="sw" style="border-color:var(--junction);background:var(--junction-bg);border-radius:8px"></span><span>Choose one of / all of</span>
       <span class="sw" style="border-color:var(--special);background:var(--special-bg);border-style:dashed"></span><span>Other requirement / unknown course</span>
       <span class="sw" style="border-color:var(--special);background:var(--special-bg);border-style:dotted"></span><span>Not offered in 2+ years</span>
-      <span style="text-align:center;font-weight:700">*</span><span>Prereqs updated from SFU's current outline (verify)</span>
+      <span style="text-align:center;font-weight:700">*</span><span>Requirements need a second look (see details)</span>
     </div>
     <p class="hint">Hover a course to highlight what it needs (and what it unlocks). Click for actions, double-click to toggle taken. Hover a chip to find it in the graph. The address bar always holds your plan, so copy or bookmark it to share or save.<br>
       <kbd>Ctrl</kbd>+<kbd>Z</kbd> undo · <kbd>F</kbd> fit · <kbd>/</kbd> add a goal · <kbd>Tab</kbd> to a chip, <kbd>D</kbd> for details</p>
@@ -222,11 +222,15 @@
     <details data-ui="about">
       <summary>About the data</summary>
       <ul>
-        <li>Course info comes from <a href="https://api.sfucourses.com" target="_blank" rel="noopener">sfucourses.com</a>. Each course's prerequisites are re-checked against SFU's official outline for its latest offering.</li>
-        <li><b>*</b> marks courses whose requirements need a second look: SFU's current wording differs from sfucourses, sfucourses had no parsed requirements, or this tool and sfucourses read the wording differently. The details panel says which.</li>
-        <li>Only course requirements are drawn. Unit counts (“60 units”), minimum grades, high-school courses and program-specific conditions are left out, so “ready” only means you have the course prereqs.</li>
-        <li>Corequisites aren't drawn either; they're listed in the hover and details for the few courses that have them.</li>
-        <li>“Retired” means not offered in about 2 years. Offering history only goes back to Spring 2024.</li>
+        <li>Course info comes from <a href="https://api.sfucourses.com" target="_blank" rel="noopener">sfucourses.com</a>. Each course's prerequisites are re-checked against SFU's official outline for its latest offering, and this tool reads the wording itself as a second opinion on sfucourses' reading.</li>
+        <li><b>*</b> marks courses whose requirements need a second look: SFU's current wording differs from sfucourses, sfucourses had no parsed requirements, or this tool and sfucourses read the wording differently (the graph then usually uses this tool's reading). The details panel says which.</li>
+        <li>Minimum grades, high-school courses and program-specific conditions aren't drawn, so “ready” means you have everything shown, not that you can enroll. That includes alternatives: MATH 150 shows “MATH 100 or MATH 110” though Pre-Calculus 12 also qualifies.</li>
+        <li>Unit counts (“60 units”), permission and corequisites come from sfucourses' reading, so a course marked <b>*</b> may be missing them; check its requirement text. Mark them satisfied from their menu.</li>
+        <li>Permission alternatives are hidden by default (see Display options).</li>
+        <li>Corequisites (courses you can take at the same time) show as their own box, like “MATH 150 (coreq)”. Marking the course itself taken satisfies it.</li>
+        <li>Substitutions (“MATH 154 or 157 may be substituted for MATH 151”) are added as extra options; the grade they need isn't checked.</li>
+        <li>“Two of the following” shows as “1 of”. Where wording is ambiguous, the stricter reading is used, so a requirement might really be optional.</li>
+        <li>“Retired” means not offered in about 2 years. Offering history only goes back to <span id="history-from">Spring 2024</span>.</li>
       </ul>
       <p><span id="data-info">Loading…</span> · <button class="linkbtn" id="btn-refresh" title="Clear the local cache and download fresh data">refresh data</button></p>
     </details>
@@ -350,9 +354,10 @@ function offeringsOf(id) {
   const terms = new Set((COURSES.get(id)?.offerings || []).map(o => o.term));
   return [...terms].sort((a, b) => termKey(b) - termKey(a)); // newest first
 }
-// not offered in the 6 terms (2 years) before the current one; the data only goes back to Spring 2024.
+// not offered in the 6 terms (2 years) before the current one; the data only goes back a few years (HISTORY_FROM).
 // Measured from today, not the newest term in the data: that's often an already-scheduled future term.
 let LATEST = new Map(); // id -> termKey of its newest offering (absent = no offerings), built once at load
+let HISTORY_FROM = 'Spring 2024'; // earliest term in the data, set at load
 const NOW = new Date();
 const CURRENT_TERM = NOW.getFullYear() * 3 + Math.floor(NOW.getMonth() / 4); // Jan-Apr spring, May-Aug summer, Sep-Dec fall
 function isStale(id) {
@@ -362,7 +367,7 @@ function isStale(id) {
 }
 function offeringSummary(id) {
   const terms = offeringsOf(id);
-  if (!terms.length) return 'No offerings since at least Spring 2024';
+  if (!terms.length) return `No offerings since at least ${HISTORY_FROM}`;
   if (isStale(id)) return `Not offered since ${terms[0]}`;
   return 'Offered ' + terms.slice(0, 3).join(', ') + (terms.length > 3 ? '…' : '');
 }
@@ -1701,9 +1706,14 @@ document.getElementById('btn-refresh').onclick = async () => {
     COURSES = new Map(bulk.outlines.map(c => [norm(`${c.dept} ${c.number}`), c]));
     DEPTS = new Set(bulk.outlines.map(c => String(c.dept).toUpperCase()));
     LATEST = new Map();
+    let earliest = Infinity;
     for (const [id, c] of COURSES) {
       const keys = (c.offerings || []).map(o => termKey(o.term));
-      if (keys.length) LATEST.set(id, Math.max(...keys));
+      if (keys.length) { LATEST.set(id, Math.max(...keys)); earliest = Math.min(earliest, ...keys); }
+    }
+    if (earliest < Infinity) {
+      HISTORY_FROM = `${['Spring', 'Summer', 'Fall'][earliest % 3]} ${Math.floor(earliest / 3)}`;
+      document.getElementById('history-from').textContent = HISTORY_FROM;
     }
     const when = bulk.stamp ? new Date(bulk.stamp) : new Date(bulk.t);
     document.getElementById('data-info').textContent =
